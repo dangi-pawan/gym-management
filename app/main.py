@@ -5,9 +5,11 @@ from sqlalchemy import text
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import app.db.models
+
 from app.db.session import engine , get_db
 from app.features.members.router import router as members_router
-
+from app.features.gyms.router import router as gyms_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -54,3 +56,4 @@ async def database_health(
 
 
 app.include_router(members_router)
+app.include_router(gyms_router)

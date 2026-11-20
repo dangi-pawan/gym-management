@@ -12,18 +12,13 @@ async def create_gym(
     db: AsyncSession,
     gym_data: GymCreate
 ) -> Gym:
+    new_gym = Gym(name=gym_data.name)
 
-    async with db.begin():
-        new_gym = Gym(
-            name=gym_data.name
-        )
+    db.add(new_gym)
+    await db.commit()
+    await db.refresh(new_gym)
 
-        db.add(new_gym)
-
-        await db.flush()
-
-    return new_gym 
-
+    return new_gym
 
 
 
@@ -69,28 +64,24 @@ async def get_gym_by_id(
 
 
 
-
 async def update_gym(
     db: AsyncSession,
     gym_id: int,
     gym_data: GymUpdate
 ):
-    async with db.begin():
-        query = select(Gym).where(Gym.id == gym_id)
-        result = await db.execute(query)
+    query = select(Gym).where(Gym.id == gym_id)
+    result = await db.execute(query)
+    gym = result.scalar_one_or_none()
 
-        gym = result.scalar_one_or_none()
+    if gym is None:
+        return None
 
-        if gym is None:
-            return None
+    gym.name = gym_data.name
 
-        gym.name = gym_data.name
-
-        await db.flush()
+    await db.commit()
+    await db.refresh(gym)
 
     return gym
-
-
 
 
 
@@ -98,24 +89,23 @@ async def delete_gym(
     db: AsyncSession,
     gym_id: int
 ):
-    async with db.begin():
-        query = select(Gym).where(Gym.id == gym_id)
-        result = await db.execute(query)
+    query = select(Gym).where(Gym.id == gym_id)
+    result = await db.execute(query)
+    gym = result.scalar_one_or_none()
 
-        gym = result.scalar_one_or_none()
+    if gym is None:
+        return "not_found"
 
-        if gym is None:
-            return "not_found"
+    member_exists_query = select(
+        exists().where(Member.gym_id == gym_id)
+    )
 
-        member_exists_query = select(
-            exists().where(Member.gym_id == gym_id)
-        )
+    member_exists = await db.scalar(member_exists_query)
 
-        member_exists = await db.scalar(member_exists_query)
+    if member_exists:
+        return "has_members"
 
-        if member_exists:
-            return "has_members"
-
-        await db.delete(gym)
+    await db.delete(gym)
+    await db.commit()
 
     return "deleted"

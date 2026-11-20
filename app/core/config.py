@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
+import os
 
 class Settings(BaseSettings):
     DATABASE_URL: str
@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE: int = 1800
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=os.getenv("ENV_FILE", ".env"),
         extra="ignore"
     )
 

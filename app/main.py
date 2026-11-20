@@ -55,5 +55,5 @@ async def database_health(
     }
 
 
-app.include_router(members_router)
 app.include_router(gyms_router)
+app.include_router(members_router)

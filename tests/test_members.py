@@ -53,9 +53,8 @@ async def test_get_all_members(client):
     assert response.status_code == 200
 
     data = response.json()
-    assert data["total"] == 2
-    assert len(data["data"]) == 2
-
+    assert data["data"]["total"] == 2
+    assert len(data["data"]["members"]) == 2
 
 @pytest.mark.asyncio
 async def test_get_member_by_id(client):

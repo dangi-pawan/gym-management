@@ -1,20 +1,29 @@
+
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI , Depends
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy import text
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.db.models
 
-from app.db.session import engine , get_db
+from app.db.session import engine, get_db
 from app.features.members.router import router as members_router
 from app.features.gyms.router import router as gyms_router
+
+from app.common.exceptions.base import AppException
+from app.common.exceptions.handlers import (
+    app_exception_handler,
+    unexpected_exception_handler,
+    validation_exception_handler,
+    http_exception_handler,
+)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        # Verify database connectivity during startup
         async with engine.connect() as connection:
             await connection.execute(text("SELECT 1"))
 
@@ -23,7 +32,6 @@ async def lifespan(app: FastAPI):
         yield
 
     finally:
-        # Clean up database connection pool during shutdown
         await engine.dispose()
         print("Database connection pool disposed.")
 
@@ -32,9 +40,28 @@ app = FastAPI(
     title="Gym Management SaaS",
     description="Multi-tenant Gym Management Platform",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
+
+# Global Exception Handlers
+
+app.add_exception_handler(
+    AppException,
+    app_exception_handler,
+)
+
+app.add_exception_handler(
+    RequestValidationError,
+    validation_exception_handler,
+)
+
+app.add_exception_handler(
+    Exception,
+    unexpected_exception_handler,
+)
+
+app.add_exception_handler(HTTPException, http_exception_handler)
 
 @app.get("/")
 async def root():
@@ -45,15 +72,17 @@ async def root():
 
 @app.get("/health/database")
 async def database_health(
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(text("SELECT 1"))
 
     return {
         "database": "connected",
-        "result": result.scalar()
+        "result": result.scalar(),
     }
 
+
+# Register Routers
 
 app.include_router(gyms_router)
 app.include_router(members_router)

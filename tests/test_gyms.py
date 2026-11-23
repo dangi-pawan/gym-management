@@ -26,8 +26,8 @@ async def test_get_all_gyms(client):
 
     data = response.json()
     assert data["success"] is True
-    assert data["total"] == 2
-    assert len(data["data"]) == 2
+    assert data["data"]["total"] == 2
+    assert len(data["data"]["gyms"]) == 2
 
 
 @pytest.mark.asyncio

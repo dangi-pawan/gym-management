@@ -3,8 +3,10 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    field_validator
+    field_validator,
 )
+
+from app.common.responses.schemas import APIResponse
 
 
 class MemberCreate(BaseModel):
@@ -35,21 +37,13 @@ class MemberResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class MemberCreateResponse(BaseModel):
-    success: bool
-    message: str
-    data: MemberResponse
-
-
-class MemberListResponse(BaseModel):
-    success: bool
-    message: str
-    data: list[MemberResponse]
+class MemberListData(BaseModel):
+    members: list[MemberResponse]
     total: int
     page: int
     limit: int
 
 
-class MemberDeleteResponse(BaseModel):
-    success: bool
-    message: str
+MemberCreateResponse = APIResponse[MemberResponse]
+MemberListResponse = APIResponse[MemberListData]
+MemberDeleteResponse = APIResponse[None]

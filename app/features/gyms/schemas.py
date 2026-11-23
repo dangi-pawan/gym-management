@@ -1,7 +1,15 @@
-from pydantic import BaseModel, ConfigDict
+
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.common.responses.schemas import APIResponse
 
 
 class GymCreate(BaseModel):
+    name: str
+
+
+class GymUpdate(BaseModel):
     name: str
 
 
@@ -12,22 +20,14 @@ class GymResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class GymCreateResponse(BaseModel):
-    success: bool
-    message: str
-    data: GymResponse
-
-
-
-class GymListResponse(BaseModel):
-    success: bool
-    message: str
-    data: list[GymResponse]
+class GymListData(BaseModel):
+    gyms: list[GymResponse]
     total: int
     page: int
     limit: int
 
 
+GymCreateResponse = APIResponse[GymResponse]
+GymListResponse = APIResponse[GymListData]
+GymDeleteResponse = APIResponse[None]
 
-class GymUpdate(BaseModel):
-    name: str

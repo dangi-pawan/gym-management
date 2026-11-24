@@ -1,8 +1,10 @@
+import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from sqlalchemy import select, update
+from sqlalchemy import and_, case, delete, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +21,11 @@ from app.features.organizations.models import Organization
 from app.features.organizations.service import _slugify, get_organization_by_slug
 from app.features.users.models import User
 from app.features.users.password_reset import PasswordResetToken
+from app.features.users.account_tokens import (
+    AuthRateLimit,
+    EmailVerificationToken,
+    EmployeeInvitationToken,
+)
 from app.features.users.organization_staff import OrganizationStaff
 from app.features.users.sessions import AuthSession, RefreshToken
 from app.features.users.service import get_user_by_email
@@ -51,6 +58,24 @@ class InvalidPasswordResetTokenException(AppException):
         )
 
 
+class AuthenticationRateLimitException(AppException):
+    def __init__(self):
+        super().__init__(
+            message="Too many attempts. Please try again later.",
+            status_code=429,
+            error_code="AUTH_RATE_LIMITED",
+        )
+
+
+class InvalidActionTokenException(AppException):
+    def __init__(self):
+        super().__init__(
+            message="The action token is invalid or expired",
+            status_code=400,
+            error_code="INVALID_ACTION_TOKEN",
+        )
+
+
 class RegistrationConflictException(AppException):
     def __init__(self):
         super().__init__(
@@ -66,10 +91,12 @@ async def _issue_session(
 ) -> tuple[str, str, datetime]:
     now = datetime.now(timezone.utc)
     refresh_expires_at = now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    absolute_expires_at = now + timedelta(days=settings.REFRESH_TOKEN_MAX_DAYS)
     session = AuthSession(
         user_id=user.id,
         organization_id=user.organization_id,
         expires_at=refresh_expires_at,
+        absolute_expires_at=absolute_expires_at,
     )
     db.add(session)
     await db.flush()
@@ -152,10 +179,15 @@ async def authenticate_employee(
         raise InvalidCredentialsException()
 
     user = await get_user_by_email(db, organization.id, email)
+    password_valid = verify_password(
+        password,
+        user.password_hash if user is not None else _DUMMY_PASSWORD_HASH,
+    )
     if (
         user is None
         or not user.is_active
-        or not verify_password(password, user.password_hash)
+        or user.email_verified_at is None
+        or not password_valid
     ):
         raise InvalidCredentialsException()
 
@@ -209,7 +241,14 @@ async def rotate_refresh_token(
 
     stored_token.used_at = now
     new_raw_token = generate_refresh_token()
-    new_expiry = now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    new_expiry = min(
+        now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+        session.absolute_expires_at,
+    )
+    if new_expiry <= now:
+        session.revoked_at = now
+        await db.commit()
+        raise InvalidRefreshTokenException()
     session.expires_at = new_expiry
     db.add(
         RefreshToken(
@@ -355,5 +394,232 @@ async def reset_password_with_token(
 
     token.used_at = now
     user.password_hash = hash_password(new_password)
+    session_ids = select(AuthSession.id).where(AuthSession.user_id == user.id)
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.session_id.in_(session_ids))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(AuthSession)
+        .where(
+            AuthSession.user_id == user.id,
+            AuthSession.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
     await db.commit()
-    await revoke_user_sessions(db, user.id)
+
+
+# A fixed Argon2 hash keeps unknown-user login attempts close to the same
+# verification cost as known-user attempts.
+_DUMMY_PASSWORD_HASH = hash_password("dummy-authentication-password-not-for-use")
+
+
+def _rate_limit_hash(key: str) -> str:
+    return hashlib.sha256(
+        f"{settings.JWT_SECRET_KEY}:{key}".encode("utf-8")
+    ).hexdigest()
+
+
+async def increment_auth_rate_limit(
+    db: AsyncSession,
+    *,
+    key: str,
+    max_attempts: int,
+    window_minutes: int,
+) -> bool:
+    """Atomically count an attempt in PostgreSQL; return True when blocked."""
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=window_minutes)
+    blocked_until = now + timedelta(minutes=window_minutes)
+    key_hash = _rate_limit_hash(key)
+    statement = (
+        pg_insert(AuthRateLimit)
+        .values(
+            key_hash=key_hash,
+            window_started_at=now,
+            attempts=1,
+            blocked_until=None,
+            updated_at=now,
+        )
+        .on_conflict_do_update(
+            index_elements=[AuthRateLimit.key_hash],
+            set_={
+                "attempts": case(
+                    (AuthRateLimit.window_started_at <= cutoff, 1),
+                    else_=AuthRateLimit.attempts + 1,
+                ),
+                "window_started_at": case(
+                    (AuthRateLimit.window_started_at <= cutoff, now),
+                    else_=AuthRateLimit.window_started_at,
+                ),
+                "blocked_until": case(
+                    (
+                        and_(
+                            AuthRateLimit.window_started_at > cutoff,
+                            AuthRateLimit.attempts >= max_attempts - 1,
+                        ),
+                        blocked_until,
+                    ),
+                    else_=AuthRateLimit.blocked_until,
+                ),
+                "updated_at": now,
+            },
+        )
+        .returning(AuthRateLimit.blocked_until)
+    )
+    result = await db.execute(statement)
+    blocked = result.scalar_one_or_none()
+    await db.commit()
+    return blocked is not None and blocked > now
+
+
+async def clear_auth_rate_limit(db: AsyncSession, *, key: str) -> None:
+    await db.execute(
+        delete(AuthRateLimit).where(
+            AuthRateLimit.key_hash == _rate_limit_hash(key)
+        )
+    )
+    await db.commit()
+
+
+async def create_email_verification_token(
+    db: AsyncSession,
+    user_id: int,
+) -> str:
+    now = datetime.now(timezone.utc)
+    await db.execute(
+        update(EmailVerificationToken)
+        .where(
+            EmailVerificationToken.user_id == user_id,
+            EmailVerificationToken.used_at.is_(None),
+        )
+        .values(used_at=now)
+    )
+    raw_token = secrets.token_urlsafe(48)
+    db.add(
+        EmailVerificationToken(
+            user_id=user_id,
+            token_hash=hash_token(raw_token),
+            expires_at=now + timedelta(hours=24),
+        )
+    )
+    await db.commit()
+    return raw_token
+
+
+async def verify_email_and_issue_session(
+    db: AsyncSession,
+    raw_token: str,
+) -> tuple[User, str, str, datetime]:
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(EmailVerificationToken)
+        .where(EmailVerificationToken.token_hash == hash_token(raw_token))
+        .with_for_update()
+    )
+    token = result.scalar_one_or_none()
+    if token is None or token.used_at is not None or token.expires_at <= now:
+        raise InvalidActionTokenException()
+
+    user_result = await db.execute(
+        select(User).where(
+            User.id == token.user_id,
+            User.is_active.is_(True),
+        ).with_for_update()
+    )
+    user = user_result.scalar_one_or_none()
+    if user is None:
+        raise InvalidActionTokenException()
+
+    token.used_at = now
+    user.email_verified_at = now
+    access, refresh, expires_at = await _issue_session(db, user)
+    return user, access, refresh, expires_at
+
+
+async def create_employee_invitation(
+    db: AsyncSession,
+    *,
+    organization_id: int,
+    full_name: str,
+    email: str,
+    organization_role: str | None,
+) -> tuple[User, str]:
+    existing = await get_user_by_email(db, organization_id, email)
+    if existing is not None:
+        raise RegistrationConflictException()
+
+    # The unusable random password is replaced only when the invite is accepted.
+    user = User(
+        organization_id=organization_id,
+        full_name=full_name,
+        email=email,
+        password_hash=hash_password(secrets.token_urlsafe(48)),
+        is_active=False,
+    )
+    db.add(user)
+    await db.flush()
+    raw_token = secrets.token_urlsafe(48)
+    db.add(
+        EmployeeInvitationToken(
+            user_id=user.id,
+            token_hash=hash_token(raw_token),
+            organization_role=organization_role,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=48),
+        )
+    )
+    await db.commit()
+    await db.refresh(user)
+    return user, raw_token
+
+
+async def accept_employee_invitation(
+    db: AsyncSession,
+    *,
+    raw_token: str,
+    password: str,
+) -> User:
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(EmployeeInvitationToken)
+        .where(EmployeeInvitationToken.token_hash == hash_token(raw_token))
+        .with_for_update()
+    )
+    invitation = result.scalar_one_or_none()
+    if (
+        invitation is None
+        or invitation.used_at is not None
+        or invitation.expires_at <= now
+    ):
+        raise InvalidActionTokenException()
+
+    user_result = await db.execute(
+        select(User).where(
+            User.id == invitation.user_id,
+            User.is_active.is_(False),
+        ).with_for_update()
+    )
+    user = user_result.scalar_one_or_none()
+    if user is None:
+        raise InvalidActionTokenException()
+
+    invitation.used_at = now
+    user.password_hash = hash_password(password)
+    user.is_active = True
+    user.email_verified_at = now
+
+    if invitation.organization_role == "admin":
+        db.add(
+            OrganizationStaff(
+                user_id=user.id,
+                organization_id=user.organization_id,
+                role="admin",
+                is_active=True,
+            )
+        )
+
+    await db.commit()
+    await db.refresh(user)
+    return user

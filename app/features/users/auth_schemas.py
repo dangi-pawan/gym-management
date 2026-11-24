@@ -71,3 +71,14 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str = Field(min_length=20, max_length=256)
     new_password: str = Field(min_length=12, max_length=128)
+
+
+class GymRoleInfo(BaseModel):
+    gym_id: int
+    role: str
+
+
+class AuthenticatedUserResponse(BaseModel):
+    user: dict
+    organization_role: str | None
+    gym_roles: list[GymRoleInfo]

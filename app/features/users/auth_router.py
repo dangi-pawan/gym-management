@@ -2,6 +2,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.responses.helpers import success_response
@@ -18,6 +19,8 @@ from app.features.users.auth_schemas import (
     PasswordChangeRequest,
     ForgotPasswordRequest,
     ResetPasswordRequest,
+    AuthenticatedUserResponse,
+    GymRoleInfo,
 )
 from app.features.users.auth_service import (
     authenticate_employee,
@@ -30,6 +33,8 @@ from app.features.users.auth_service import (
 )
 from app.features.users.dependencies import get_current_user, require_csrf
 from app.features.users.models import User
+from app.features.users.gym_staff import GymStaff
+from app.features.users.organization_staff import OrganizationStaff
 from app.features.users.schemas import UserResponse
 from app.features.organizations.service import get_organization_by_slug
 from app.features.users.service import get_user_by_email
@@ -263,11 +268,44 @@ async def change_password(
         message="Password changed. Please sign in again.",
     )
 
-@router.get("/me", response_model=APIResponse[UserResponse])
+@router.post("/logout-all", response_model=APIResponse[None])
+async def logout_all_sessions(
+    response: Response,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+):
+    await revoke_user_sessions(db, current_user.id)
+    _clear_auth_cookies(response)
+    return success_response(message="All sessions have been revoked")
+
+
+@router.get("/me", response_model=APIResponse[AuthenticatedUserResponse])
 async def get_authenticated_employee(
     current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
 ):
+    organization_role_result = await db.execute(
+        select(OrganizationStaff.role).where(
+            OrganizationStaff.user_id == current_user.id,
+            OrganizationStaff.organization_id == current_user.organization_id,
+            OrganizationStaff.is_active.is_(True),
+        )
+    )
+    gym_roles_result = await db.execute(
+        select(GymStaff.gym_id, GymStaff.role).where(
+            GymStaff.user_id == current_user.id,
+            GymStaff.organization_id == current_user.organization_id,
+            GymStaff.is_active.is_(True),
+        ).order_by(GymStaff.gym_id)
+    )
     return success_response(
         message="Authenticated employee fetched successfully",
-        data=UserResponse.model_validate(current_user),
+        data=AuthenticatedUserResponse(
+            user=UserResponse.model_validate(current_user).model_dump(),
+            organization_role=organization_role_result.scalar_one_or_none(),
+            gym_roles=[
+                GymRoleInfo(gym_id=gym_id, role=role)
+                for gym_id, role in gym_roles_result.all()
+            ],
+        ),
     )

@@ -121,17 +121,6 @@ def require_gym_roles(*allowed_roles: str):
         current_user: Annotated[User, Depends(get_current_user)],
         db: Annotated[AsyncSession, Depends(get_db)],
     ) -> User:
-        organization_result = await db.execute(
-            select(OrganizationStaff.role).where(
-                OrganizationStaff.user_id == current_user.id,
-                OrganizationStaff.organization_id == current_user.organization_id,
-                OrganizationStaff.is_active.is_(True),
-            )
-        )
-        organization_role = organization_result.scalar_one_or_none()
-        if organization_role in {"owner", "admin"}:
-            return current_user
-
         gym_result = await db.execute(
             select(Gym.id).where(
                 Gym.id == gym_id,
@@ -143,6 +132,17 @@ def require_gym_roles(*allowed_roles: str):
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Gym not found",
             )
+
+        organization_result = await db.execute(
+            select(OrganizationStaff.role).where(
+                OrganizationStaff.user_id == current_user.id,
+                OrganizationStaff.organization_id == current_user.organization_id,
+                OrganizationStaff.is_active.is_(True),
+            )
+        )
+        organization_role = organization_result.scalar_one_or_none()
+        if organization_role in {"owner", "admin"}:
+            return current_user
 
         staff_result = await db.execute(
             select(GymStaff.role).where(

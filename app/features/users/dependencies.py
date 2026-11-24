@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Any
 
 import jwt
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,10 +21,13 @@ def _unauthorized() -> HTTPException:
     )
 
 
-async def require_csrf(request: Request) -> None:
+async def require_csrf(
+    request: Request,
+    csrf_header: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+) -> None:
     valid = verify_csrf_token(
         request.cookies.get(settings.CSRF_TOKEN_COOKIE_NAME),
-        request.headers.get("X-CSRF-Token"),
+        csrf_header,
     )
     if not valid:
         raise HTTPException(
@@ -36,6 +39,7 @@ async def require_csrf(request: Request) -> None:
 async def get_current_user(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
+    csrf_header: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 ) -> User:
     raw_token = request.cookies.get(settings.ACCESS_TOKEN_COOKIE_NAME)
     if not raw_token:
@@ -70,7 +74,7 @@ async def get_current_user(
         raise _unauthorized()
 
     if request.method not in {"GET", "HEAD", "OPTIONS", "TRACE"}:
-        await require_csrf(request)
+        await require_csrf(request, csrf_header)
 
     user_result = await db.execute(
         select(User).where(

@@ -35,7 +35,6 @@ def upgrade() -> None:
             ["users.id", "users.organization_id"],
             name="fk_organization_staff_user_org",
         ),
-        sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "user_id",
             "organization_id",

@@ -1,4 +1,4 @@
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -16,17 +16,12 @@ from app.features.users.auth_schemas import EmployeeInvitationCreate
 from app.features.users.auth_service import create_employee_invitation
 from app.core.config import settings
 from app.core.email import send_email
-from app.features.users.service import create_user
 
 
 router = APIRouter(
     prefix="/organizations/{organization_id}/employees",
     tags=["Organization Employees"],
 )
-
-
-class EmployeeCreate(UserCreate):
-    organization_role: Literal["admin"] | None = None
 
 
 class EmployeeStatusUpdate(BaseModel):

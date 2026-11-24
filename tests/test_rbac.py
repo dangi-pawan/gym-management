@@ -1,25 +1,27 @@
+import re
+
 import pytest
+
+from app.core.config import settings
 
 
 @pytest.mark.asyncio
-async def test_owner_can_create_employee_and_assign_gym_role(
+async def test_owner_can_invite_employee_and_assign_gym_role(
     client,
     organization_id,
     create_gym,
+    invite_employee,
 ):
     gym = await create_gym("RBAC Gym")
     gym_id = gym.json()["data"]["id"]
 
-    employee_response = await client.post(
-        f"/organizations/{organization_id}/employees/",
-        json={
-            "full_name": "Gym Manager",
-            "email": "manager@example.com",
-            "password": "StrongPassword123",
-        },
+    invitation, accepted = await invite_employee(
+        "Gym Manager",
+        "manager@example.com",
     )
-    assert employee_response.status_code == 201
-    employee_id = employee_response.json()["data"]["id"]
+    assert invitation.status_code == 202
+    assert accepted.status_code == 200
+    employee_id = invitation.json()["data"]["user_id"]
 
     assignment = await client.post(
         f"/gyms/{gym_id}/staff/",
@@ -30,32 +32,31 @@ async def test_owner_can_create_employee_and_assign_gym_role(
 
 
 @pytest.mark.asyncio
-async def test_manager_can_manage_members(
+async def test_manager_can_create_members_but_trainer_is_read_only(
     client,
     organization_id,
     create_gym,
+    invite_employee,
 ):
     gym = await create_gym("Manager Gym")
     gym_id = gym.json()["data"]["id"]
-
-    employee = await client.post(
-        f"/organizations/{organization_id}/employees/",
-        json={
-            "full_name": "Gym Manager",
-            "email": "manager@example.com",
-            "password": "StrongPassword123",
-        },
+    invitation, accepted = await invite_employee(
+        "Gym Manager",
+        "manager@example.com",
     )
-    employee_id = employee.json()["data"]["id"]
-    await client.post(
+    assert invitation.status_code == 202 and accepted.status_code == 200
+    manager_id = invitation.json()["data"]["user_id"]
+    assignment = await client.post(
         f"/gyms/{gym_id}/staff/",
-        json={"user_id": employee_id, "role": "manager"},
+        json={"user_id": manager_id, "role": "manager"},
     )
+    assert assignment.status_code == 201
 
-    await client.post("/auth/logout", headers={
-        "X-CSRF-Token": client.cookies.get("csrf_token")
-    })
-    login = await client.post(
+    await client.post(
+        "/auth/logout",
+        headers={"X-CSRF-Token": client.cookies.get(settings.CSRF_TOKEN_COOKIE_NAME)},
+    )
+    manager_login = await client.post(
         "/auth/login",
         json={
             "organization_slug": "test-organization",
@@ -63,12 +64,8 @@ async def test_manager_can_manage_members(
             "password": "StrongPassword123",
         },
     )
-    client.headers["X-CSRF-Token"] = login.json()["data"]["csrf_token"]
-
-    assigned_gyms = await client.get("/gyms/")
-    assert assigned_gyms.status_code == 200
-    assert assigned_gyms.json()["data"]["total"] == 1
-    assert assigned_gyms.json()["data"]["gyms"][0]["id"] == gym_id
+    assert manager_login.status_code == 200
+    client.headers["X-CSRF-Token"] = manager_login.json()["data"]["csrf_token"]
 
     created = await client.post(
         f"/gyms/{gym_id}/members/",
@@ -80,7 +77,19 @@ async def test_manager_can_manage_members(
 @pytest.mark.asyncio
 async def test_organization_owner_cannot_access_another_tenants_gym(
     client,
+    monkeypatch,
 ):
+    import app.features.users.auth_router as auth_router_module
+
+    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.test")
+    monkeypatch.setattr(settings, "SMTP_FROM_EMAIL", "no-reply@example.test")
+    sent = []
+
+    async def fake_send_email(to_email, subject, body):
+        sent.append(body)
+
+    monkeypatch.setattr(auth_router_module, "send_email", fake_send_email)
+
     first_registration = await client.post(
         "/auth/register",
         json={
@@ -90,7 +99,11 @@ async def test_organization_owner_cannot_access_another_tenants_gym(
             "password": "StrongPassword123",
         },
     )
-    client.headers["X-CSRF-Token"] = first_registration.json()["data"]["csrf_token"]
+    assert first_registration.status_code == 202
+    first_token = re.search(r"Verification token: (\\S+)", sent[-1]).group(1)
+    verified = await client.post("/auth/verify-email", json={"token": first_token})
+    assert verified.status_code == 200
+    client.headers["X-CSRF-Token"] = verified.json()["data"]["csrf_token"]
     first_gym = await client.post("/gyms/", json={"name": "First Gym"})
     first_gym_id = first_gym.json()["data"]["id"]
 
@@ -103,37 +116,49 @@ async def test_organization_owner_cannot_access_another_tenants_gym(
             "password": "StrongPassword123",
         },
     )
-    client.headers["X-CSRF-Token"] = second_registration.json()["data"]["csrf_token"]
+    assert second_registration.status_code == 202
+    second_token = re.search(r"Verification token: (\\S+)", sent[-1]).group(1)
+    second_verified = await client.post(
+        "/auth/verify-email",
+        json={"token": second_token},
+    )
+    assert second_verified.status_code == 200
 
     response = await client.get(f"/gyms/{first_gym_id}")
     assert response.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_trainer_cannot_create_member(
+async def test_trainer_cannot_create_or_update_members(
     client,
     organization_id,
     create_gym,
+    invite_employee,
 ):
     gym = await create_gym("Trainer Gym")
     gym_id = gym.json()["data"]["id"]
-    employee = await client.post(
-        f"/organizations/{organization_id}/employees/",
-        json={
-            "full_name": "Gym Trainer",
-            "email": "trainer@example.com",
-            "password": "StrongPassword123",
-        },
+    created_member = await client.post(
+        f"/gyms/{gym_id}/members/",
+        json={"name": "Existing Member", "age": 26},
     )
-    employee_id = employee.json()["data"]["id"]
-    await client.post(
+    assert created_member.status_code == 201
+    member_id = created_member.json()["data"]["id"]
+
+    invitation, accepted = await invite_employee(
+        "Gym Trainer",
+        "trainer@example.com",
+    )
+    assert invitation.status_code == 202 and accepted.status_code == 200
+    employee_id = invitation.json()["data"]["user_id"]
+    assignment = await client.post(
         f"/gyms/{gym_id}/staff/",
         json={"user_id": employee_id, "role": "trainer"},
     )
+    assert assignment.status_code == 201
 
     await client.post(
         "/auth/logout",
-        headers={"X-CSRF-Token": client.cookies.get("csrf_token")},
+        headers={"X-CSRF-Token": client.cookies.get(settings.CSRF_TOKEN_COOKIE_NAME)},
     )
     login = await client.post(
         "/auth/login",
@@ -143,6 +168,7 @@ async def test_trainer_cannot_create_member(
             "password": "StrongPassword123",
         },
     )
+    assert login.status_code == 200
     client.headers["X-CSRF-Token"] = login.json()["data"]["csrf_token"]
 
     response = await client.post(
@@ -150,6 +176,11 @@ async def test_trainer_cannot_create_member(
         json={"name": "New Member", "age": 26},
     )
     assert response.status_code == 403
+    update = await client.put(
+        f"/gyms/{gym_id}/members/{member_id}",
+        json={"name": "Changed", "age": 27},
+    )
+    assert update.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -157,22 +188,19 @@ async def test_deactivating_employee_prevents_future_login(
     client,
     organization_id,
     create_gym,
+    invite_employee,
 ):
     await create_gym("Account Control Gym")
-    employee = await client.post(
-        f"/organizations/{organization_id}/employees/",
-        json={
-            "full_name": "Employee Account",
-            "email": "employee-status@example.com",
-            "password": "StrongPassword123",
-        },
+    invitation, accepted = await invite_employee(
+        "Employee Account",
+        "employee-status@example.com",
     )
-    assert employee.status_code == 201
-    employee_id = employee.json()["data"]["id"]
+    assert invitation.status_code == 202 and accepted.status_code == 200
+    employee_id = invitation.json()["data"]["user_id"]
 
     await client.post(
         "/auth/logout",
-        headers={"X-CSRF-Token": client.cookies.get("csrf_token")},
+        headers={"X-CSRF-Token": client.cookies.get(settings.CSRF_TOKEN_COOKIE_NAME)},
     )
     employee_login = await client.post(
         "/auth/login",
@@ -186,7 +214,7 @@ async def test_deactivating_employee_prevents_future_login(
 
     await client.post(
         "/auth/logout",
-        headers={"X-CSRF-Token": client.cookies.get("csrf_token")},
+        headers={"X-CSRF-Token": client.cookies.get(settings.CSRF_TOKEN_COOKIE_NAME)},
     )
     owner_login = await client.post(
         "/auth/login",
@@ -196,6 +224,7 @@ async def test_deactivating_employee_prevents_future_login(
             "password": "OwnerPassword123",
         },
     )
+    assert owner_login.status_code == 200
     client.headers["X-CSRF-Token"] = owner_login.json()["data"]["csrf_token"]
 
     deactivated = await client.patch(

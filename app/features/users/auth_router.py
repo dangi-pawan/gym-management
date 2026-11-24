@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.responses.helpers import success_response
+from app.common.responses.schemas import APIResponse
 from app.db.session import get_db
 from app.features.users.auth_schemas import LoginRequest, TokenResponse
 from app.features.users.auth_service import authenticate_employee
@@ -10,7 +11,10 @@ from app.features.users.auth_service import authenticate_employee
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-@router.post("/login", response_model=None)
+@router.post(
+    "/login",
+    response_model=APIResponse[TokenResponse],
+)
 async def login(
     credentials: LoginRequest,
     db: AsyncSession = Depends(get_db),

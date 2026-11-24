@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
 
     JWT_SECRET_KEY: str = Field(min_length=32)
+    CSRF_SECRET_KEY: str | None = Field(default=None, min_length=32)
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=15, gt=0, le=1440)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=14, gt=0, le=90)

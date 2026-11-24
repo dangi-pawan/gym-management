@@ -35,7 +35,7 @@ def generate_refresh_token() -> str:
 def create_csrf_token() -> str:
     nonce = secrets.token_urlsafe(32)
     signature = hmac.new(
-        settings.JWT_SECRET_KEY.encode("utf-8"),
+        (settings.CSRF_SECRET_KEY or settings.JWT_SECRET_KEY).encode("utf-8"),
         nonce.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
@@ -52,7 +52,7 @@ def verify_csrf_token(cookie_token: str | None, header_token: str | None) -> boo
     except ValueError:
         return False
     expected_signature = hmac.new(
-        settings.JWT_SECRET_KEY.encode("utf-8"),
+        (settings.CSRF_SECRET_KEY or settings.JWT_SECRET_KEY).encode("utf-8"),
         nonce.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()

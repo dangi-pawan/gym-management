@@ -110,29 +110,28 @@ async def register_organization_owner(
         slug = f"{base_slug[:180 - len(suffix)]}{suffix}"
         suffix_number += 1
 
-    organization = Organization(name=organization_name, slug=slug)
-    db.add(organization)
-    await db.flush()
-
-    user = User(
-        organization_id=organization.id,
-        full_name=full_name,
-        email=email,
-        password_hash=hash_password(password),
-    )
-    db.add(user)
-    await db.flush()
-
-    db.add(
-        OrganizationStaff(
-            user_id=user.id,
-            organization_id=organization.id,
-            role="owner",
-            is_active=True,
-        )
-    )
-
     try:
+        organization = Organization(name=organization_name, slug=slug)
+        db.add(organization)
+        await db.flush()
+
+        user = User(
+            organization_id=organization.id,
+            full_name=full_name,
+            email=email,
+            password_hash=hash_password(password),
+        )
+        db.add(user)
+        await db.flush()
+
+        db.add(
+            OrganizationStaff(
+                user_id=user.id,
+                organization_id=organization.id,
+                role="owner",
+                is_active=True,
+            )
+        )
         access, refresh, expires_at = await _issue_session(db, user)
     except IntegrityError:
         await db.rollback()

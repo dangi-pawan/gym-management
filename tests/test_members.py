@@ -129,7 +129,7 @@ async def test_member_tenant_isolation(client, create_gym):
 
 
 @pytest.mark.asyncio
-async def test_create_member_for_nonexistent_gym(client):
+async def test_create_member_for_nonexistent_gym(client, create_gym):
     response = await client.post(
         "/gyms/9999/members/",
         json={"name": "Rahul", "age": 25},

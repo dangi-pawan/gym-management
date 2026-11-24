@@ -70,14 +70,13 @@ async def test_update_organization(client):
 
 
 @pytest.mark.asyncio
-async def test_delete_organization(client):
+async def test_cannot_delete_organization_while_owner_account_exists(client):
     await _register(client, "Delete Organization")
     organization = await _current_organization(client)
 
     response = await client.delete(f"/organizations/{organization['id']}")
-    assert response.status_code == 200
-    assert response.json()["success"] is True
-    assert response.json()["data"] is None
+    assert response.status_code == 409
+    assert response.json()["success"] is False
 
 
 @pytest.mark.asyncio

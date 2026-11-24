@@ -295,9 +295,13 @@ async def logout(
 @router.post("/forgot-password", response_model=APIResponse[None])
 async def forgot_password(
     request_data: ForgotPasswordRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    rate_key = f"password-reset:{request_data.organization_slug}:{request_data.email}"
+    rate_key = (
+        f"password-reset:{request.client.host if request.client else 'unknown'}:"
+        f"{request_data.organization_slug}:{request_data.email}"
+    )
     if await increment_auth_rate_limit(
         db,
         key=rate_key,

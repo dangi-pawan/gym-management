@@ -11,7 +11,11 @@ from app.features.users.auth_service import revoke_user_sessions
 from app.features.users.dependencies import require_org_roles
 from app.features.users.models import User
 from app.features.users.organization_staff import OrganizationStaff
-from app.features.users.schemas import UserCreate, UserResponse
+from app.features.users.schemas import UserResponse
+from app.features.users.auth_schemas import EmployeeInvitationCreate
+from app.features.users.auth_service import create_employee_invitation
+from app.core.config import settings
+from app.core.email import send_email
 from app.features.users.service import create_user
 
 
@@ -29,44 +33,40 @@ class EmployeeStatusUpdate(BaseModel):
     is_active: bool
 
 
-@router.post("/", status_code=status.HTTP_201_CREATED)
-async def create_employee_endpoint(
+@router.post("/invitations", status_code=status.HTTP_202_ACCEPTED)
+async def invite_employee_endpoint(
     organization_id: int,
-    employee_data: EmployeeCreate,
+    invitation_data: EmployeeInvitationCreate,
     current_user: Annotated[User, Depends(require_org_roles("owner", "admin"))],
     db: AsyncSession = Depends(get_db),
 ):
     if organization_id != current_user.organization_id:
         raise HTTPException(status_code=404, detail="Organization not found")
+    if not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL:
+        raise HTTPException(status_code=503, detail="Email delivery is not configured")
 
-    employee = await create_user(
+    employee, raw_token = await create_employee_invitation(
         db,
-        organization_id,
-        UserCreate(
-            full_name=employee_data.full_name,
-            email=employee_data.email,
-            password=employee_data.password,
+        organization_id=organization_id,
+        full_name=invitation_data.full_name,
+        email=str(invitation_data.email),
+        organization_role=invitation_data.organization_role,
+    )
+    await send_email(
+        str(employee.email),
+        "You have been invited to Gym Management",
+        (
+            f"Hello {employee.full_name},\n\n"
+            "An administrator invited you to join the organization. "
+            "Accept the invitation by submitting this one-time token to "
+            "POST /auth/accept-invitation and choosing your password. "
+            "The token expires in 48 hours.\n\n"
+            f"Invitation token: {raw_token}"
         ),
     )
-    if employee is None:
-        raise HTTPException(
-            status_code=409,
-            detail="An employee with this email already exists in the organization",
-        )
-    if employee_data.organization_role == "admin":
-        db.add(
-            OrganizationStaff(
-                user_id=employee.id,
-                organization_id=organization_id,
-                role="admin",
-                is_active=True,
-            )
-        )
-        await db.commit()
-        await db.refresh(employee)
     return success_response(
-        message="Employee created successfully",
-        data=UserResponse.model_validate(employee),
+        message="Employee invitation sent successfully",
+        data={"user_id": employee.id, "email": employee.email},
     )
 
 

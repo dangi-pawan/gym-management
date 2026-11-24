@@ -20,6 +20,8 @@ from app.common.exceptions.handlers import (
     http_exception_handler,
 )
 
+from app.features.organizations.router import router as organizations_router
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -84,5 +86,6 @@ async def database_health(
 
 # Register Routers
 
+app.include_router(organizations_router)
 app.include_router(gyms_router)
 app.include_router(members_router)

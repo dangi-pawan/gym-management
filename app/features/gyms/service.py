@@ -12,14 +12,16 @@ async def create_gym(
     db: AsyncSession,
     gym_data: GymCreate
 ) -> Gym:
-    new_gym = Gym(name=gym_data.name)
+    new_gym = Gym(
+        name=gym_data.name,
+        organization_id=gym_data.organization_id,
+    )
 
     db.add(new_gym)
     await db.commit()
     await db.refresh(new_gym)
 
     return new_gym
-
 
 
 async def get_all_gyms(

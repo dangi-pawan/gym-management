@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.main import app
 
+from app.features.organizations.models import Organization
 
 @pytest_asyncio.fixture
 async def db_connection():
@@ -29,6 +30,38 @@ async def db_connection():
                 await transaction.rollback()
 
     await test_engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def organization_id(db_connection):
+    TestSessionLocal = async_sessionmaker(
+        bind=db_connection,
+        expire_on_commit=False,
+        autoflush=False,
+        join_transaction_mode="create_savepoint",
+    )
+
+    async with TestSessionLocal() as session:
+        organization = Organization(name="Test Organization")
+
+        session.add(organization)
+        await session.commit()
+
+        return organization.id
+
+
+@pytest_asyncio.fixture
+async def create_gym(client, organization_id):
+    async def _create(name):
+        return await client.post(
+            "/gyms/",
+            json={
+                "name": name,
+                "organization_id": organization_id,
+            },
+        )
+
+    return _create
 
 
 @pytest_asyncio.fixture

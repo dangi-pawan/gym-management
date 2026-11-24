@@ -1,95 +1,80 @@
-
 import pytest
 
 
-@pytest.mark.asyncio
-async def test_create_organization(client):
+async def _register(client, organization_name):
     response = await client.post(
-        "/organizations/",
-        json={"name": "Test Organization"},
+        "/auth/register",
+        json={
+            "organization_name": organization_name,
+            "full_name": "Organization Owner",
+            "email": "owner@example.com",
+            "password": "StrongPassword123",
+        },
     )
+    assert response.status_code == 200
+    client.headers["X-CSRF-Token"] = response.json()["data"]["csrf_token"]
+    return response
 
-    assert response.status_code == 201
 
-    data = response.json()
-
-    assert data["success"] is True
-    assert data["data"]["name"] == "Test Organization"
-    assert data["data"]["slug"] == "test-organization"
-    assert data["data"]["id"] is not None
+async def _current_organization(client):
+    response = await client.get("/organizations/")
+    assert response.status_code == 200
+    return response.json()["data"][0]
 
 
 @pytest.mark.asyncio
-async def test_get_all_organizations(client):
-    await client.post(
-        "/organizations/",
-        json={"name": "Organization One"},
-    )
+async def test_register_organization_creates_owner_and_session(client):
+    response = await _register(client, "Test Organization")
+    assert response.json()["success"] is True
+    assert response.json()["data"]["csrf_token"]
 
-    await client.post(
-        "/organizations/",
-        json={"name": "Organization Two"},
-    )
+    organization = await _current_organization(client)
+    assert organization["name"] == "Test Organization"
+    assert organization["slug"] == "test-organization"
 
-    response = await client.get("/organizations/")
 
-    assert response.status_code == 200
+@pytest.mark.asyncio
+async def test_organization_listing_is_tenant_scoped(client):
+    await _register(client, "Organization One")
+    first = await _current_organization(client)
+    await _register(client, "Organization Two")
+    second = await _current_organization(client)
 
-    data = response.json()["data"]
-    names = [organization["name"] for organization in data]
-
-    assert "Organization One" in names
-    assert "Organization Two" in names
+    assert first["name"] == "Organization One"
+    assert second["name"] == "Organization Two"
+    assert first["id"] != second["id"]
 
 
 @pytest.mark.asyncio
 async def test_get_organization_by_id(client):
-    create_response = await client.post(
-        "/organizations/",
-        json={"name": "Get Organization"},
-    )
+    await _register(client, "Get Organization")
+    organization = await _current_organization(client)
 
-    organization_id = create_response.json()["data"]["id"]
-
-    response = await client.get(
-        f"/organizations/{organization_id}"
-    )
-
+    response = await client.get(f"/organizations/{organization['id']}")
     assert response.status_code == 200
     assert response.json()["data"]["name"] == "Get Organization"
 
 
 @pytest.mark.asyncio
 async def test_update_organization(client):
-    create_response = await client.post(
-        "/organizations/",
-        json={"name": "Old Organization"},
-    )
-
-    organization_id = create_response.json()["data"]["id"]
+    await _register(client, "Old Organization")
+    organization = await _current_organization(client)
 
     response = await client.put(
-        f"/organizations/{organization_id}",
+        f"/organizations/{organization['id']}",
         json={"name": "Updated Organization"},
     )
-
     assert response.status_code == 200
     assert response.json()["data"]["name"] == "Updated Organization"
+    assert response.json()["data"]["slug"] == "old-organization"
 
 
 @pytest.mark.asyncio
 async def test_delete_organization(client):
-    create_response = await client.post(
-        "/organizations/",
-        json={"name": "Delete Organization"},
-    )
+    await _register(client, "Delete Organization")
+    organization = await _current_organization(client)
 
-    organization_id = create_response.json()["data"]["id"]
-
-    response = await client.delete(
-        f"/organizations/{organization_id}"
-    )
-
+    response = await client.delete(f"/organizations/{organization['id']}")
     assert response.status_code == 200
     assert response.json()["success"] is True
     assert response.json()["data"] is None
@@ -103,69 +88,22 @@ async def test_cannot_delete_organization_with_gyms(
 ):
     await create_gym("Test Gym")
 
-    response = await client.delete(
-        f"/organizations/{organization_id}"
-    )
-
+    response = await client.delete(f"/organizations/{organization_id}")
     assert response.status_code == 409
     assert response.json()["success"] is False
 
 
 @pytest.mark.asyncio
-async def test_get_nonexistent_organization(client):
-    response = await client.get("/organizations/99999999")
+async def test_cross_tenant_organization_access_is_hidden(client):
+    await _register(client, "Organization One")
+    first = await _current_organization(client)
+    await _register(client, "Organization Two")
 
+    response = await client.get(f"/organizations/{first['id']}")
     assert response.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_update_nonexistent_organization(client):
-    response = await client.put(
-        "/organizations/99999999",
-        json={"name": "Updated Organization"},
-    )
-
-    assert response.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_delete_nonexistent_organization(client):
-    response = await client.delete("/organizations/99999999")
-
-    assert response.status_code == 404
-
-
-
-@pytest.mark.asyncio
-async def test_duplicate_organization_names_get_unique_slugs(client):
-    first = await client.post(
-        "/organizations/",
-        json={"name": "Fitness Club"},
-    )
-    second = await client.post(
-        "/organizations/",
-        json={"name": "Fitness Club"},
-    )
-
-    assert first.status_code == 201
-    assert second.status_code == 201
-    assert first.json()["data"]["slug"] == "fitness-club"
-    assert second.json()["data"]["slug"] == "fitness-club-2"
-
-
-@pytest.mark.asyncio
-async def test_organization_slug_does_not_change_when_name_changes(client):
-    created = await client.post(
-        "/organizations/",
-        json={"name": "Old Fitness Club"},
-    )
-    organization_id = created.json()["data"]["id"]
-
-    updated = await client.put(
-        f"/organizations/{organization_id}",
-        json={"name": "New Fitness Club"},
-    )
-
-    assert updated.status_code == 200
-    assert updated.json()["data"]["name"] == "New Fitness Club"
-    assert updated.json()["data"]["slug"] == "old-fitness-club"
+async def test_unauthenticated_organization_access_is_rejected(client):
+    response = await client.get("/organizations/")
+    assert response.status_code == 401

@@ -160,7 +160,9 @@ async def test_refresh_rotates_refresh_cookie_and_rejects_reuse(
     assert client.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME) != old_refresh
 
     new_csrf = refreshed.json()["data"]["csrf_token"]
-    client.cookies.set(settings.REFRESH_TOKEN_COOKIE_NAME, old_refresh)
+    for cookie in client.cookies.jar:
+        if cookie.name == settings.REFRESH_TOKEN_COOKIE_NAME:
+            cookie.value = old_refresh
     reused = await client.post(
         "/auth/refresh",
         headers={"X-CSRF-Token": new_csrf},

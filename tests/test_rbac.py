@@ -337,13 +337,13 @@ async def test_resending_invitation_invalidates_previous_token(
     )
     assert invited.status_code == 202
     user_id = invited.json()["data"]["user_id"]
-    old_token = re.search(r"Invitation token: (\\S+)", sent[-1]).group(1)
+    old_token = re.search(r"Invitation token: (\S+)", sent[-1]).group(1)
 
     resent = await client.post(
         f"/organizations/{organization_id}/employees/{user_id}/invitation/resend"
     )
     assert resent.status_code == 202
-    new_token = re.search(r"Invitation token: (\\S+)", sent[-1]).group(1)
+    new_token = re.search(r"Invitation token: (\S+)", sent[-1]).group(1)
     assert new_token != old_token
 
     old_acceptance = await client.post(
@@ -384,7 +384,7 @@ async def test_deactivating_pending_invitation_invalidates_token(
     )
     assert invited.status_code == 202
     user_id = invited.json()["data"]["user_id"]
-    token = re.search(r"Invitation token: (\\S+)", sent[-1]).group(1)
+    token = re.search(r"Invitation token: (\S+)", sent[-1]).group(1)
 
     deactivated = await client.patch(
         f"/organizations/{organization_id}/employees/{user_id}/status",

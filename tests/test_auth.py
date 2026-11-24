@@ -241,3 +241,65 @@ async def test_logout_revokes_session(
     )
     assert logout.status_code == 200
     assert (await client.get("/auth/me")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_password_reset_uses_single_use_email_token(
+    client,
+    organization_id,
+    db_connection,
+    monkeypatch,
+):
+    import re
+    import app.features.users.auth_router as auth_router_module
+
+    await _create_employee(db_connection, organization_id)
+    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.test")
+    monkeypatch.setattr(settings, "SMTP_FROM_EMAIL", "no-reply@example.test")
+
+    sent_messages = []
+
+    async def fake_send_email(to_email, subject, body):
+        sent_messages.append((to_email, subject, body))
+
+    monkeypatch.setattr(auth_router_module, "send_email", fake_send_email)
+
+    forgot = await client.post(
+        "/auth/forgot-password",
+        json={
+            "organization_slug": "test-organization",
+            "email": "employee@example.com",
+        },
+    )
+    assert forgot.status_code == 200
+    assert len(sent_messages) == 1
+    match = re.search(r"One-time reset token: (\S+)", sent_messages[0][2])
+    assert match is not None
+
+    reset = await client.post(
+        "/auth/reset-password",
+        json={
+            "token": match.group(1),
+            "new_password": "ResetPassword123",
+        },
+    )
+    assert reset.status_code == 200
+
+    reused = await client.post(
+        "/auth/reset-password",
+        json={
+            "token": match.group(1),
+            "new_password": "AnotherResetPassword123",
+        },
+    )
+    assert reused.status_code == 400
+
+    login = await client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "test-organization",
+            "email": "employee@example.com",
+            "password": "ResetPassword123",
+        },
+    )
+    assert login.status_code == 200

@@ -102,3 +102,46 @@ async def test_organization_owner_cannot_access_another_tenants_gym(
 
     response = await client.get(f"/gyms/{first_gym_id}")
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_trainer_cannot_create_member(
+    client,
+    organization_id,
+    create_gym,
+):
+    gym = await create_gym("Trainer Gym")
+    gym_id = gym.json()["data"]["id"]
+    employee = await client.post(
+        f"/organizations/{organization_id}/employees/",
+        json={
+            "full_name": "Gym Trainer",
+            "email": "trainer@example.com",
+            "password": "StrongPassword123",
+        },
+    )
+    employee_id = employee.json()["data"]["id"]
+    await client.post(
+        f"/gyms/{gym_id}/staff/",
+        json={"user_id": employee_id, "role": "trainer"},
+    )
+
+    await client.post(
+        "/auth/logout",
+        headers={"X-CSRF-Token": client.cookies.get("csrf_token")},
+    )
+    login = await client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "test-organization",
+            "email": "trainer@example.com",
+            "password": "StrongPassword123",
+        },
+    )
+    client.headers["X-CSRF-Token"] = login.json()["data"]["csrf_token"]
+
+    response = await client.post(
+        f"/gyms/{gym_id}/members/",
+        json={"name": "New Member", "age": 26},
+    )
+    assert response.status_code == 403

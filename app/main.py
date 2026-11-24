@@ -21,6 +21,8 @@ from app.common.exceptions.handlers import (
 
 from app.features.organizations.router import router as organizations_router
 from app.features.users.auth_router import router as auth_router
+from app.features.users.router import router as users_router
+from app.features.users.staff_router import router as gym_staff_router
 
 
 @asynccontextmanager
@@ -72,3 +74,5 @@ app.include_router(organizations_router)
 app.include_router(gyms_router)
 app.include_router(members_router)
 app.include_router(auth_router)
+app.include_router(users_router)
+app.include_router(gym_staff_router)

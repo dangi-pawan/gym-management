@@ -1,4 +1,3 @@
-
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.common.responses.schemas import APIResponse
@@ -15,6 +14,7 @@ class OrganizationUpdate(BaseModel):
 class OrganizationResponse(BaseModel):
     id: int
     name: str
+    slug: str
 
     model_config = ConfigDict(from_attributes=True)
 

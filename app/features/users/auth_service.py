@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -16,6 +17,7 @@ from app.core.security import (
 from app.features.organizations.models import Organization
 from app.features.organizations.service import _slugify, get_organization_by_slug
 from app.features.users.models import User
+from app.features.users.password_reset import PasswordResetToken
 from app.features.users.organization_staff import OrganizationStaff
 from app.features.users.sessions import AuthSession, RefreshToken
 from app.features.users.service import get_user_by_email
@@ -36,6 +38,15 @@ class InvalidRefreshTokenException(AppException):
             message="Refresh session is invalid or expired",
             status_code=401,
             error_code="INVALID_REFRESH_TOKEN",
+        )
+
+
+class InvalidPasswordResetTokenException(AppException):
+    def __init__(self):
+        super().__init__(
+            message="Password reset token is invalid or expired",
+            status_code=400,
+            error_code="INVALID_PASSWORD_RESET_TOKEN",
         )
 
 
@@ -288,3 +299,61 @@ def decode_access_token(raw_token: str) -> dict:
         algorithms=[settings.JWT_ALGORITHM],
         options={"require": ["exp", "iat", "sub", "org_id", "sid", "type"]},
     )
+
+
+async def create_password_reset_token(
+    db: AsyncSession,
+    user_id: int,
+) -> str:
+    now = datetime.now(timezone.utc)
+    await db.execute(
+        update(PasswordResetToken)
+        .where(
+            PasswordResetToken.user_id == user_id,
+            PasswordResetToken.used_at.is_(None),
+        )
+        .values(used_at=now)
+    )
+    raw_token = secrets.token_urlsafe(48)
+    db.add(
+        PasswordResetToken(
+            user_id=user_id,
+            token_hash=hash_token(raw_token),
+            expires_at=now + timedelta(minutes=30),
+        )
+    )
+    await db.commit()
+    return raw_token
+
+
+async def reset_password_with_token(
+    db: AsyncSession,
+    *,
+    raw_token: str,
+    new_password: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(PasswordResetToken)
+        .where(PasswordResetToken.token_hash == hash_token(raw_token))
+        .with_for_update()
+    )
+    token = result.scalar_one_or_none()
+    if (
+        token is None
+        or token.used_at is not None
+        or token.expires_at <= now
+    ):
+        raise InvalidPasswordResetTokenException()
+
+    user_result = await db.execute(
+        select(User).where(User.id == token.user_id, User.is_active.is_(True))
+    )
+    user = user_result.scalar_one_or_none()
+    if user is None:
+        raise InvalidPasswordResetTokenException()
+
+    token.used_at = now
+    user.password_hash = hash_password(new_password)
+    await db.commit()
+    await revoke_user_sessions(db, user.id)

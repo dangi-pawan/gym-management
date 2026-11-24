@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -6,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.responses.helpers import success_response
 from app.common.responses.schemas import APIResponse
 from app.core.config import settings
+from app.core.email import send_email
 from app.core.security import create_csrf_token, hash_password, verify_password
 from app.db.session import get_db
 from app.features.users.auth_schemas import (
@@ -14,10 +16,14 @@ from app.features.users.auth_schemas import (
     RefreshResponse,
     RegisterOrganizationRequest,
     PasswordChangeRequest,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
 )
 from app.features.users.auth_service import (
     authenticate_employee,
+    create_password_reset_token,
     register_organization_owner,
+    reset_password_with_token,
     revoke_refresh_session,
     revoke_user_sessions,
     rotate_refresh_token,
@@ -25,7 +31,11 @@ from app.features.users.auth_service import (
 from app.features.users.dependencies import get_current_user, require_csrf
 from app.features.users.models import User
 from app.features.users.schemas import UserResponse
+from app.features.organizations.service import get_organization_by_slug
+from app.features.users.service import get_user_by_email
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -178,6 +188,62 @@ async def logout(
     return success_response(message="Logged out successfully")
 
 
+
+
+
+@router.post("/forgot-password", response_model=APIResponse[None])
+async def forgot_password(
+    request_data: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    if not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL:
+        raise HTTPException(
+            status_code=503,
+            detail="Password reset email delivery is not configured",
+        )
+
+    organization = await get_organization_by_slug(
+        db, request_data.organization_slug
+    )
+    if organization is not None:
+        user = await get_user_by_email(
+            db, organization.id, str(request_data.email)
+        )
+        if user is not None and user.is_active:
+            raw_token = await create_password_reset_token(db, user.id)
+            try:
+                await send_email(
+                    str(user.email),
+                    "Gym Management password reset",
+                    (
+                        "A password reset was requested for your account.\n\n"
+                        f"One-time reset token: {raw_token}\n\n"
+                        "Submit this token to POST /auth/reset-password in the API "
+                        "documentation. It expires in 30 minutes. If you did not "
+                        "request this, ignore this email."
+                    ),
+                )
+            except Exception:
+                logger.exception("Password reset email delivery failed")
+
+    return success_response(
+        message="If the account exists, password reset instructions have been sent."
+    )
+
+
+@router.post("/reset-password", response_model=APIResponse[None])
+async def reset_password(
+    reset_data: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    await reset_password_with_token(
+        db,
+        raw_token=reset_data.token,
+        new_password=reset_data.new_password,
+    )
+    return success_response(
+        message="Password reset successfully. Please sign in again."
+    )
 
 @router.post("/change-password", response_model=APIResponse[None])
 async def change_password(

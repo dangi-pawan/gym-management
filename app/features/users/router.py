@@ -13,6 +13,7 @@ from app.features.users.models import User
 from app.features.users.organization_staff import OrganizationStaff
 from app.features.users.schemas import UserResponse
 from app.features.users.auth_schemas import EmployeeInvitationCreate
+from app.features.users.account_tokens import EmployeeInvitationToken
 from app.features.users.auth_service import (
     create_employee_invitation,
     resend_employee_invitation,
@@ -214,11 +215,6 @@ async def resend_employee_invitation_endpoint(
     ):
         raise AuthenticationRateLimitException()
 
-    employee, raw_token, organization_role = await resend_employee_invitation(
-        db,
-        organization_id=organization_id,
-        user_id=user_id,
-    )
     current_role = await db.scalar(
         select(OrganizationStaff.role).where(
             OrganizationStaff.user_id == current_user.id,
@@ -226,11 +222,23 @@ async def resend_employee_invitation_endpoint(
             OrganizationStaff.is_active.is_(True),
         )
     )
-    if organization_role == "admin" and current_role != "owner":
+    previous_role = await db.scalar(
+        select(EmployeeInvitationToken.organization_role)
+        .where(EmployeeInvitationToken.user_id == user_id)
+        .order_by(EmployeeInvitationToken.id.desc())
+        .limit(1)
+    )
+    if previous_role == "admin" and current_role != "owner":
         raise HTTPException(
             status_code=403,
             detail="Only an organization owner can resend an admin invitation",
         )
+
+    employee, raw_token, _organization_role = await resend_employee_invitation(
+        db,
+        organization_id=organization_id,
+        user_id=user_id,
+    )
 
     await send_email(
         str(employee.email),

@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.features.users.schemas import UserResponse
+
 
 class LoginRequest(BaseModel):
     organization_slug: str = Field(min_length=1, max_length=180)
@@ -78,7 +80,6 @@ class GymRoleInfo(BaseModel):
     role: str
 
 
-class AuthenticatedUserResponse(BaseModel):
-    user: dict
+class AuthenticatedUserResponse(UserResponse):
     organization_role: str | None
     gym_roles: list[GymRoleInfo]

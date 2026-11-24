@@ -301,7 +301,7 @@ async def get_authenticated_employee(
     return success_response(
         message="Authenticated employee fetched successfully",
         data=AuthenticatedUserResponse(
-            user=UserResponse.model_validate(current_user).model_dump(),
+            **UserResponse.model_validate(current_user).model_dump(),
             organization_role=organization_role_result.scalar_one_or_none(),
             gym_roles=[
                 GymRoleInfo(gym_id=gym_id, role=role)

@@ -11,10 +11,7 @@ from app.features.users.auth_service import authenticate_employee
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-@router.post(
-    "/login",
-    response_model=APIResponse[TokenResponse],
-)
+@router.post("/login", response_model=APIResponse[TokenResponse])
 async def login(
     credentials: LoginRequest,
     db: AsyncSession = Depends(get_db),
@@ -25,7 +22,6 @@ async def login(
         email=str(credentials.email),
         password=credentials.password,
     )
-
     return success_response(
         message="Login successful",
         data=TokenResponse(

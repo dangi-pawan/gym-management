@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.responses.helpers import success_response
@@ -14,6 +14,7 @@ from app.features.users.organization_staff import OrganizationStaff
 from app.features.users.schemas import UserResponse
 from app.features.users.auth_schemas import EmployeeInvitationCreate
 from app.features.users.auth_service import create_employee_invitation
+from app.features.users.account_tokens import EmployeeInvitationToken
 from app.core.config import settings
 from app.core.email import send_email
 
@@ -158,6 +159,14 @@ async def update_employee_status(
 
     employee.is_active = status_data.is_active
     if not employee.is_active:
+        await db.execute(
+            update(EmployeeInvitationToken)
+            .where(
+                EmployeeInvitationToken.user_id == employee.id,
+                EmployeeInvitationToken.used_at.is_(None),
+            )
+            .values(used_at=func.now())
+        )
         await revoke_user_sessions(db, employee.id)
     else:
         await db.commit()

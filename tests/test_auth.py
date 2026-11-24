@@ -371,7 +371,7 @@ async def test_owner_registration_requires_email_verification(
     )
     assert before_verification.status_code == 401
 
-    token = re.search(r"Verification token: (\\S+)", sent[-1]).group(1)
+    token = re.search(r"Verification token: (\S+)", sent[-1]).group(1)
     verified = await client.post("/auth/verify-email", json={"token": token})
     assert verified.status_code == 200
     assert verified.json()["data"]["csrf_token"]

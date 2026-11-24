@@ -100,7 +100,7 @@ async def test_organization_owner_cannot_access_another_tenants_gym(
         },
     )
     assert first_registration.status_code == 202
-    first_token = re.search(r"Verification token: (\\S+)", sent[-1]).group(1)
+    first_token = re.search(r"Verification token: (\S+)", sent[-1]).group(1)
     verified = await client.post("/auth/verify-email", json={"token": first_token})
     assert verified.status_code == 200
     client.headers["X-CSRF-Token"] = verified.json()["data"]["csrf_token"]
@@ -117,7 +117,7 @@ async def test_organization_owner_cannot_access_another_tenants_gym(
         },
     )
     assert second_registration.status_code == 202
-    second_token = re.search(r"Verification token: (\\S+)", sent[-1]).group(1)
+    second_token = re.search(r"Verification token: (\S+)", sent[-1]).group(1)
     second_verified = await client.post(
         "/auth/verify-email",
         json={"token": second_token},

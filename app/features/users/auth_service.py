@@ -125,23 +125,20 @@ async def register_organization_owner(
     full_name: str,
     email: str,
     password: str,
-) -> tuple[User, str, str, datetime]:
+) -> User:
     base_slug = _slugify(organization_name)
     existing_result = await db.execute(select(Organization.slug))
     used_slugs = set(existing_result.scalars().all())
-
     slug = base_slug
     suffix_number = 2
     while slug in used_slugs:
         suffix = f"-{suffix_number}"
         slug = f"{base_slug[:180 - len(suffix)]}{suffix}"
         suffix_number += 1
-
     try:
         organization = Organization(name=organization_name, slug=slug)
         db.add(organization)
         await db.flush()
-
         user = User(
             organization_id=organization.id,
             full_name=full_name,
@@ -150,21 +147,18 @@ async def register_organization_owner(
         )
         db.add(user)
         await db.flush()
-
-        db.add(
-            OrganizationStaff(
-                user_id=user.id,
-                organization_id=organization.id,
-                role="owner",
-                is_active=True,
-            )
-        )
-        access, refresh, expires_at = await _issue_session(db, user)
+        db.add(OrganizationStaff(
+            user_id=user.id,
+            organization_id=organization.id,
+            role="owner",
+            is_active=True,
+        ))
+        await db.commit()
+        await db.refresh(user)
     except IntegrityError:
         await db.rollback()
         raise RegistrationConflictException() from None
-
-    return user, access, refresh, expires_at
+    return user
 
 
 async def authenticate_employee(
@@ -173,7 +167,9 @@ async def authenticate_employee(
     organization_slug: str,
     email: str,
     password: str,
+    client_ip: str,
 ) -> tuple[User, str, str, datetime]:
+    rate_key = f"login:{client_ip}:{organization_slug}:{email}"
     organization = await get_organization_by_slug(db, organization_slug)
     if organization is None:
         raise InvalidCredentialsException()
@@ -189,8 +185,16 @@ async def authenticate_employee(
         or user.email_verified_at is None
         or not password_valid
     ):
+        if await increment_auth_rate_limit(
+            db,
+            key=rate_key,
+            max_attempts=settings.LOGIN_MAX_ATTEMPTS,
+            window_minutes=settings.LOGIN_RATE_LIMIT_MINUTES,
+        ):
+            raise AuthenticationRateLimitException()
         raise InvalidCredentialsException()
 
+    await clear_auth_rate_limit(db, key=rate_key)
     access, refresh, expires_at = await _issue_session(db, user)
     return user, access, refresh, expires_at
 

@@ -19,17 +19,25 @@ from app.features.users.auth_schemas import (
     PasswordChangeRequest,
     ForgotPasswordRequest,
     ResetPasswordRequest,
+    RegisterResponse,
+    EmailVerificationRequest,
+    EmployeeInvitationAcceptRequest,
     AuthenticatedUserResponse,
     GymRoleInfo,
 )
 from app.features.users.auth_service import (
     authenticate_employee,
+    create_email_verification_token,
+    verify_email_and_issue_session,
+    accept_employee_invitation,
     create_password_reset_token,
+    increment_auth_rate_limit,
     register_organization_owner,
     reset_password_with_token,
     revoke_refresh_session,
     revoke_user_sessions,
     rotate_refresh_token,
+    AuthenticationRateLimitException,
 )
 from app.features.users.dependencies import get_current_user, require_csrf
 from app.features.users.models import User
@@ -110,21 +118,110 @@ def _login_response(
     )
 
 
-@router.post("/register", response_model=APIResponse[LoginResponse])
+@router.post("/register", response_model=APIResponse[RegisterResponse], status_code=202)
 async def register_organization(
     registration: RegisterOrganizationRequest,
-    response: Response,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    _user, access_token, refresh_token, expires_at = await register_organization_owner(
+    if not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL:
+        raise HTTPException(status_code=503, detail="Email delivery is not configured")
+    rate_key = f"register:{request.client.host if request.client else 'unknown'}"
+    if await increment_auth_rate_limit(
+        db, key=rate_key, max_attempts=3, window_minutes=60
+    ):
+        raise AuthenticationRateLimitException()
+    user = await register_organization_owner(
         db,
         organization_name=registration.organization_name,
         full_name=registration.full_name,
         email=str(registration.email),
         password=registration.password,
     )
-    return _login_response(
-        response, access_token, refresh_token, expires_at
+    raw_token = await create_email_verification_token(db, user.id)
+    await send_email(
+        str(user.email),
+        "Verify your Gym Management account",
+        (
+            "Verify your email by submitting this one-time token to "
+            "POST /auth/verify-email. The token expires in 24 hours.\n\n"
+            f"Verification token: {raw_token}"
+        ),
+    )
+    return success_response(
+        message="Registration successful. Check your email to verify your account.",
+        data=RegisterResponse(email_verification_required=True),
+    )
+
+
+@router.post("/verify-email", response_model=APIResponse[LoginResponse])
+async def verify_email(
+    verification: EmailVerificationRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    _user, access_token, refresh_token, expires_at = await verify_email_and_issue_session(
+        db, verification.token
+    )
+    return _login_response(response, access_token, refresh_token, expires_at)
+
+
+@router.post("/accept-invitation", response_model=APIResponse[None])
+async def accept_invitation(
+    invitation: EmployeeInvitationAcceptRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    await accept_employee_invitation(
+        db,
+        raw_token=invitation.token,
+        password=invitation.password,
+    )
+    return success_response(message="Invitation accepted. You can now sign in.")
+
+
+@router.post("/login", response_model=APIResponse[LoginResponse])
+async def login(
+    credentials: LoginRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    _user, access_token, refresh_token, expires_at = await authenticate_employee(
+        db,
+        organization_slug=credentials.organization_slug,
+        email=str(credentials.email),
+        password=credentials.password,
+        client_ip=request.client.host if request.client else "unknown",
+    )
+    return _login_response(response, access_token, refresh_token, expires_at)
+
+
+@router.post("/resend-verification", response_model=APIResponse[None])
+async def resend_verification(
+    request_data: ForgotPasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    rate_key = (
+        f"verify-resend:{request.client.host if request.client else 'unknown'}:"
+        f"{request_data.organization_slug}:{request_data.email}"
+    )
+    blocked = await increment_auth_rate_limit(
+        db, key=rate_key, max_attempts=3, window_minutes=60
+    )
+    if not blocked and settings.SMTP_HOST and settings.SMTP_FROM_EMAIL:
+        organization = await get_organization_by_slug(db, request_data.organization_slug)
+        if organization is not None:
+            user = await get_user_by_email(db, organization.id, str(request_data.email))
+            if user is not None and user.is_active and user.email_verified_at is None:
+                raw_token = await create_email_verification_token(db, user.id)
+                await send_email(
+                    str(user.email),
+                    "Verify your Gym Management account",
+                    f"Verification token: {raw_token}\nExpires in 24 hours.",
+                )
+    return success_response(
+        message="If verification is pending, instructions have been sent."
     )
 
 
@@ -200,11 +297,18 @@ async def forgot_password(
     request_data: ForgotPasswordRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    if not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL:
-        raise HTTPException(
-            status_code=503,
-            detail="Password reset email delivery is not configured",
+    rate_key = f"password-reset:{request_data.organization_slug}:{request_data.email}"
+    if await increment_auth_rate_limit(
+        db,
+        key=rate_key,
+        max_attempts=settings.PASSWORD_RESET_MAX_REQUESTS,
+        window_minutes=settings.PASSWORD_RESET_RATE_LIMIT_MINUTES,
+    ):
+        return success_response(
+            message="If the account exists, password reset instructions have been sent."
         )
+    if not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL:
+        raise HTTPException(status_code=503, detail="Email delivery is not configured")
 
     organization = await get_organization_by_slug(
         db, request_data.organization_slug

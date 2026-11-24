@@ -83,3 +83,42 @@ class GymRoleInfo(BaseModel):
 class AuthenticatedUserResponse(UserResponse):
     organization_role: str | None
     gym_roles: list[GymRoleInfo]
+
+
+class RegisterResponse(BaseModel):
+    email_verification_required: bool = True
+
+
+class EmailVerificationRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=256)
+
+
+class EmployeeInvitationAcceptRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=256)
+    password: str = Field(min_length=12, max_length=128)
+
+
+class EmployeeInvitationCreate(BaseModel):
+    full_name: str = Field(min_length=2, max_length=120)
+    email: EmailStr
+    organization_role: str | None = None
+
+    @field_validator("full_name")
+    @classmethod
+    def strip_full_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Full name cannot be empty")
+        return value
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("organization_role")
+    @classmethod
+    def validate_organization_role(cls, value: str | None) -> str | None:
+        if value not in (None, "admin"):
+            raise ValueError("Organization role must be admin or omitted")
+        return value

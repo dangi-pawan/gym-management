@@ -26,7 +26,7 @@ async def _register(client, organization_name, monkeypatch):
         },
     )
     assert response.status_code == 202
-    token = re.search(r"Verification token: (\\S+)", sent[-1]).group(1)
+    token = re.search(r"Verification token: (\S+)", sent[-1]).group(1)
     verified = await client.post("/auth/verify-email", json={"token": token})
     assert verified.status_code == 200
     client.headers["X-CSRF-Token"] = verified.json()["data"]["csrf_token"]

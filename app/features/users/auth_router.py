@@ -111,7 +111,7 @@ async def register_organization(
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
-    user, access_token, refresh_token, expires_at = await register_organization_owner(
+    _user, access_token, refresh_token, expires_at = await register_organization_owner(
         db,
         organization_name=registration.organization_name,
         full_name=registration.full_name,

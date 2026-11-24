@@ -78,6 +78,7 @@ COOKIE_SAMESITE=lax. Production must set:
 - COOKIE_SAMESITE=lax for same-site frontend/API deployments
 - CORS_ORIGINS='["https://app.example.com"]' for the exact frontend origin
 - COOKIE_DOMAIN only if a shared parent-domain cookie is deliberately needed
+- SMTP_HOST, SMTP_PORT, SMTP_FROM_EMAIL, and SMTP authentication/TLS values for password reset
 
 CORS credentials are enabled only for the configured origins. Never use a
 wildcard origin with credentialed cookies. Keep JWT_SECRET_KEY private and

@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.exceptions.base import AppException
@@ -228,6 +228,28 @@ async def rotate_refresh_token(
     )
     await db.commit()
     return access_token, new_raw_token, access_expires_at
+
+
+async def revoke_user_sessions(
+    db: AsyncSession,
+    user_id: int,
+) -> None:
+    now = datetime.now(timezone.utc)
+    session_ids = select(AuthSession.id).where(AuthSession.user_id == user_id)
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.session_id.in_(session_ids))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(AuthSession)
+        .where(
+            AuthSession.user_id == user_id,
+            AuthSession.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+    await db.commit()
 
 
 async def revoke_refresh_session(

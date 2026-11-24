@@ -1,23 +1,25 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.responses.helpers import success_response
 from app.common.responses.schemas import APIResponse
 from app.core.config import settings
-from app.core.security import create_csrf_token
+from app.core.security import create_csrf_token, hash_password, verify_password
 from app.db.session import get_db
 from app.features.users.auth_schemas import (
     LoginRequest,
     LoginResponse,
     RefreshResponse,
     RegisterOrganizationRequest,
+    PasswordChangeRequest,
 )
 from app.features.users.auth_service import (
     authenticate_employee,
     register_organization_owner,
     revoke_refresh_session,
+    revoke_user_sessions,
     rotate_refresh_token,
 )
 from app.features.users.dependencies import get_current_user, require_csrf
@@ -175,6 +177,26 @@ async def logout(
     _clear_auth_cookies(response)
     return success_response(message="Logged out successfully")
 
+
+
+@router.post("/change-password", response_model=APIResponse[None])
+async def change_password(
+    password_data: PasswordChangeRequest,
+    response: Response,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+):
+    if not verify_password(password_data.current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=400,
+            detail="Current password is incorrect",
+        )
+    current_user.password_hash = hash_password(password_data.new_password)
+    await revoke_user_sessions(db, current_user.id)
+    _clear_auth_cookies(response)
+    return success_response(
+        message="Password changed. Please sign in again.",
+    )
 
 @router.get("/me", response_model=APIResponse[UserResponse])
 async def get_authenticated_employee(

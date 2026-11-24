@@ -47,3 +47,7 @@ class LoginResponse(BaseModel):
 class RefreshResponse(BaseModel):
     csrf_token: str
     access_expires_at: datetime
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=12, max_length=128)

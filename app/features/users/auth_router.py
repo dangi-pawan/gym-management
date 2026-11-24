@@ -209,7 +209,13 @@ async def resend_verification(
     blocked = await increment_auth_rate_limit(
         db, key=rate_key, max_attempts=3, window_minutes=60
     )
-    if not blocked and settings.SMTP_HOST and settings.SMTP_FROM_EMAIL:
+    ip_blocked = await increment_auth_rate_limit(
+        db,
+        key=f"verify-resend-ip:{request.client.host if request.client else 'unknown'}",
+        max_attempts=20,
+        window_minutes=60,
+    )
+    if not blocked and not ip_blocked and settings.SMTP_HOST and settings.SMTP_FROM_EMAIL:
         organization = await get_organization_by_slug(db, request_data.organization_slug)
         if organization is not None:
             user = await get_user_by_email(db, organization.id, str(request_data.email))
@@ -285,12 +291,19 @@ async def forgot_password(
         f"password-reset:{request.client.host if request.client else 'unknown'}:"
         f"{request_data.organization_slug}:{request_data.email}"
     )
-    if await increment_auth_rate_limit(
+    identity_blocked = await increment_auth_rate_limit(
         db,
         key=rate_key,
         max_attempts=settings.PASSWORD_RESET_MAX_REQUESTS,
         window_minutes=settings.PASSWORD_RESET_RATE_LIMIT_MINUTES,
-    ):
+    )
+    ip_blocked = await increment_auth_rate_limit(
+        db,
+        key=f"password-reset-ip:{request.client.host if request.client else 'unknown'}",
+        max_attempts=settings.PASSWORD_RESET_IP_MAX_REQUESTS,
+        window_minutes=settings.PASSWORD_RESET_RATE_LIMIT_MINUTES,
+    )
+    if identity_blocked or ip_blocked:
         return success_response(
             message="If the account exists, password reset instructions have been sent."
         )

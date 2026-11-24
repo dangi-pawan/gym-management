@@ -15,8 +15,10 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=14, gt=0, le=30)
     REFRESH_TOKEN_MAX_DAYS: int = Field(default=30, gt=0, le=90)
     LOGIN_MAX_ATTEMPTS: int = Field(default=5, gt=0, le=20)
+    LOGIN_IP_MAX_ATTEMPTS: int = Field(default=50, gt=0, le=500)
     LOGIN_RATE_LIMIT_MINUTES: int = Field(default=15, gt=0, le=1440)
     PASSWORD_RESET_MAX_REQUESTS: int = Field(default=3, gt=0, le=20)
+    PASSWORD_RESET_IP_MAX_REQUESTS: int = Field(default=20, gt=0, le=200)
     PASSWORD_RESET_RATE_LIMIT_MINUTES: int = Field(default=60, gt=0, le=1440)
     EMPLOYEE_INVITATION_MAX_PER_HOUR: int = Field(default=20, gt=0, le=200)
     APP_ENV: Literal["development", "test", "production"] = "development"

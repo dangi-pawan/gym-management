@@ -174,10 +174,13 @@ Defaults are configurable:
 
 | Operation | Limit | Window |
 |---|---:|---:|
-| Failed login | 5 | 15 minutes |
+| Failed login for the same IP/identity pair | 5 | 15 minutes |
+| Failed logins from one IP across identities | 50 | 15 minutes |
 | Organization registration | 3 | 60 minutes per client IP |
 | Password reset request | 3 | 60 minutes per client IP and identity |
+| Password reset requests from one IP across identities | 20 | 60 minutes |
 | Verification resend | 3 | 60 minutes per client IP and identity |
+| Verification resends from one IP across identities | 20 | 60 minutes |
 | Employee invitations | 20 | 60 minutes per organization admin |
 
 Login attempts use a dummy Argon2 hash for unknown users to reduce account
@@ -294,6 +297,26 @@ port, cookie Secure setting, and browser cookie policy before testing RBAC.
 - [ ] Manager can manage members and the assigned gym.
 - [ ] Removing a gym assignment blocks subsequent gym access.
 - [ ] Deactivating an employee blocks login and revokes sessions.
+
+### Rate-limit maintenance
+
+Rate-limit keys are stored in PostgreSQL so counters are shared across workers.
+Schedule a daily cleanup of keys that have been inactive for at least 48 hours:
+
+```sql
+DELETE FROM auth_rate_limits
+WHERE updated_at < now() - interval '48 hours';
+```
+
+### Employee and ownership endpoints
+
+- `POST /organizations/{organization_id}/employees/invitations`
+- `POST /organizations/{organization_id}/employees/{user_id}/invitation/resend`
+- `GET /organizations/{organization_id}/employees/`
+- `PATCH /organizations/{organization_id}/employees/{user_id}/status`
+- `POST /organizations/{organization_id}/ownership/transfer`
+- `POST /gyms/{gym_id}/staff/`, `GET /gyms/{gym_id}/staff/`,
+  and `DELETE /gyms/{gym_id}/staff/{user_id}`
 
 Run all tests against the test database:
 

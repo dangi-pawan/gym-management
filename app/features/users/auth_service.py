@@ -173,12 +173,19 @@ async def authenticate_employee(
     organization = await get_organization_by_slug(db, organization_slug)
     if organization is None:
         verify_password(password, _DUMMY_PASSWORD_HASH)
-        if await increment_auth_rate_limit(
+        identity_blocked = await increment_auth_rate_limit(
             db,
             key=rate_key,
             max_attempts=settings.LOGIN_MAX_ATTEMPTS,
             window_minutes=settings.LOGIN_RATE_LIMIT_MINUTES,
-        ):
+        )
+        ip_blocked = await increment_auth_rate_limit(
+            db,
+            key=f"login-ip:{client_ip}",
+            max_attempts=settings.LOGIN_IP_MAX_ATTEMPTS,
+            window_minutes=settings.LOGIN_RATE_LIMIT_MINUTES,
+        )
+        if identity_blocked or ip_blocked:
             raise AuthenticationRateLimitException()
         raise InvalidCredentialsException()
 

@@ -3,7 +3,15 @@ from app.features.gyms.models import Gym
 from app.features.members.models import Member
 from app.features.users.models import User
 from app.features.users.gym_staff import GymStaff
+from app.features.users.sessions import AuthSession, RefreshToken
 
 
-
-__all__ = ["Organization", "Gym", "Member", "User", "GymStaff"]
+__all__ = [
+    "Organization",
+    "Gym",
+    "Member",
+    "User",
+    "GymStaff",
+    "AuthSession",
+    "RefreshToken",
+]

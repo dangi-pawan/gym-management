@@ -19,7 +19,11 @@ class LoginRequest(BaseModel):
         return value.strip().lower()
 
 
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_at: datetime
+class LoginResponse(BaseModel):
+    csrf_token: str
+    access_expires_at: datetime
+
+
+class RefreshResponse(BaseModel):
+    csrf_token: str
+    access_expires_at: datetime

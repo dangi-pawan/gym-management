@@ -1,14 +1,24 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.responses.helpers import success_response
 from app.common.responses.schemas import APIResponse
+from app.core.config import settings
+from app.core.security import create_csrf_token
 from app.db.session import get_db
-from app.features.users.auth_schemas import LoginRequest, TokenResponse
-from app.features.users.auth_service import authenticate_employee
-from app.features.users.dependencies import get_current_user
+from app.features.users.auth_schemas import (
+    LoginRequest,
+    LoginResponse,
+    RefreshResponse,
+)
+from app.features.users.auth_service import (
+    authenticate_employee,
+    revoke_refresh_session,
+    rotate_refresh_token,
+)
+from app.features.users.dependencies import get_current_user, require_csrf
 from app.features.users.models import User
 from app.features.users.schemas import UserResponse
 
@@ -16,24 +26,128 @@ from app.features.users.schemas import UserResponse
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-@router.post("/login", response_model=APIResponse[TokenResponse])
+def _set_auth_cookies(
+    response: Response,
+    access_token: str,
+    refresh_token: str,
+    csrf_token: str,
+) -> None:
+    common = {
+        "secure": settings.COOKIE_SECURE,
+        "samesite": settings.COOKIE_SAMESITE,
+        "domain": settings.COOKIE_DOMAIN,
+    }
+    response.set_cookie(
+        key=settings.ACCESS_TOKEN_COOKIE_NAME,
+        value=access_token,
+        httponly=True,
+        path="/",
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        **common,
+    )
+    response.set_cookie(
+        key=settings.REFRESH_TOKEN_COOKIE_NAME,
+        value=refresh_token,
+        httponly=True,
+        path="/auth",
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+        **common,
+    )
+    response.set_cookie(
+        key=settings.CSRF_TOKEN_COOKIE_NAME,
+        value=csrf_token,
+        httponly=False,
+        path="/",
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+        **common,
+    )
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    common = {
+        "secure": settings.COOKIE_SECURE,
+        "samesite": settings.COOKIE_SAMESITE,
+        "domain": settings.COOKIE_DOMAIN,
+    }
+    response.delete_cookie(
+        settings.ACCESS_TOKEN_COOKIE_NAME, path="/", **common
+    )
+    response.delete_cookie(
+        settings.REFRESH_TOKEN_COOKIE_NAME, path="/auth", **common
+    )
+    response.delete_cookie(
+        settings.CSRF_TOKEN_COOKIE_NAME, path="/", **common
+    )
+
+
+@router.post("/login", response_model=APIResponse[LoginResponse])
 async def login(
     credentials: LoginRequest,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ):
-    access_token, expires_at = await authenticate_employee(
+    user, access_token, refresh_token, expires_at = await authenticate_employee(
         db,
         organization_slug=credentials.organization_slug,
         email=str(credentials.email),
         password=credentials.password,
     )
+    csrf_token = create_csrf_token()
+    _set_auth_cookies(response, access_token, refresh_token, csrf_token)
     return success_response(
         message="Login successful",
-        data=TokenResponse(
-            access_token=access_token,
-            expires_at=expires_at,
+        data=LoginResponse(
+            csrf_token=csrf_token,
+            access_expires_at=expires_at,
         ),
     )
+
+
+@router.post(
+    "/refresh",
+    response_model=APIResponse[RefreshResponse],
+    dependencies=[Depends(require_csrf)],
+)
+async def refresh(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        access_token, refresh_token, expires_at = await rotate_refresh_token(
+            db,
+            request.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME),
+        )
+    except Exception:
+        _clear_auth_cookies(response)
+        raise
+    csrf_token = create_csrf_token()
+    _set_auth_cookies(response, access_token, refresh_token, csrf_token)
+    return success_response(
+        message="Session refreshed successfully",
+        data=RefreshResponse(
+            csrf_token=csrf_token,
+            access_expires_at=expires_at,
+        ),
+    )
+
+
+@router.post(
+    "/logout",
+    response_model=APIResponse[None],
+    dependencies=[Depends(require_csrf)],
+)
+async def logout(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    await revoke_refresh_session(
+        db,
+        request.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME),
+    )
+    _clear_auth_cookies(response)
+    return success_response(message="Logged out successfully")
 
 
 @router.get("/me", response_model=APIResponse[UserResponse])

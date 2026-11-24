@@ -80,8 +80,10 @@ COOKIE_SAMESITE=lax. Production must set:
 - COOKIE_DOMAIN only if a shared parent-domain cookie is deliberately needed
 - SMTP_HOST, SMTP_PORT, SMTP_FROM_EMAIL, and SMTP authentication/TLS values for password reset
 
-CORS credentials are enabled only for the configured origins. Never use a
-wildcard origin with credentialed cookies. Keep JWT_SECRET_KEY private and
+CORS credentials are enabled only for the configured origins. A browser
+frontend on a separate origin must send requests with credentials enabled and
+must copy the returned CSRF token into X-CSRF-Token. Never use a wildcard origin
+with credentialed cookies. Keep JWT_SECRET_KEY private and
 at least 32 characters long.
 
 ### Automated tests

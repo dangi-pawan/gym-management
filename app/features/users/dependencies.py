@@ -9,8 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.security import verify_csrf_token
 from app.db.session import get_db
+from app.features.gyms.models import Gym
 from app.features.users.auth_service import decode_access_token
+from app.features.users.gym_staff import GymStaff
 from app.features.users.models import User
+from app.features.users.organization_staff import OrganizationStaff
 from app.features.users.sessions import AuthSession
 
 
@@ -87,3 +90,79 @@ async def get_current_user(
     if user is None:
         raise _unauthorized()
     return user
+
+
+def require_org_roles(*allowed_roles: str):
+    async def role_guard(
+        current_user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[AsyncSession, Depends(get_db)],
+    ) -> User:
+        result = await db.execute(
+            select(OrganizationStaff.role).where(
+                OrganizationStaff.user_id == current_user.id,
+                OrganizationStaff.organization_id == current_user.organization_id,
+                OrganizationStaff.is_active.is_(True),
+            )
+        )
+        role = result.scalar_one_or_none()
+        if role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient organization permissions",
+            )
+        return current_user
+
+    return role_guard
+
+
+def require_gym_roles(*allowed_roles: str):
+    async def role_guard(
+        gym_id: int,
+        current_user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[AsyncSession, Depends(get_db)],
+    ) -> User:
+        organization_result = await db.execute(
+            select(OrganizationStaff.role).where(
+                OrganizationStaff.user_id == current_user.id,
+                OrganizationStaff.organization_id == current_user.organization_id,
+                OrganizationStaff.is_active.is_(True),
+            )
+        )
+        organization_role = organization_result.scalar_one_or_none()
+        if organization_role in {"owner", "admin"}:
+            return current_user
+
+        gym_result = await db.execute(
+            select(Gym.id).where(
+                Gym.id == gym_id,
+                Gym.organization_id == current_user.organization_id,
+            )
+        )
+        if gym_result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Gym not found",
+            )
+
+        staff_result = await db.execute(
+            select(GymStaff.role).where(
+                GymStaff.user_id == current_user.id,
+                GymStaff.gym_id == gym_id,
+                GymStaff.organization_id == current_user.organization_id,
+                GymStaff.is_active.is_(True),
+            )
+        )
+        gym_role = staff_result.scalar_one_or_none()
+        if gym_role is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Gym not found",
+            )
+        if gym_role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient gym permissions",
+            )
+        return current_user
+
+    return role_guard

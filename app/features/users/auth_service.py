@@ -636,3 +636,55 @@ async def accept_employee_invitation(
     await db.commit()
     await db.refresh(user)
     return user
+
+
+async def resend_employee_invitation(
+    db: AsyncSession,
+    *,
+    organization_id: int,
+    user_id: int,
+) -> tuple[User, str, str | None]:
+    now = datetime.now(timezone.utc)
+    user_result = await db.execute(
+        select(User).where(
+            User.id == user_id,
+            User.organization_id == organization_id,
+            User.is_active.is_(False),
+            User.email_verified_at.is_(None),
+        ).with_for_update()
+    )
+    user = user_result.scalar_one_or_none()
+    if user is None:
+        raise InvalidActionTokenException()
+
+    token_result = await db.execute(
+        select(EmployeeInvitationToken)
+        .where(EmployeeInvitationToken.user_id == user_id)
+        .order_by(EmployeeInvitationToken.id.desc())
+        .limit(1)
+        .with_for_update()
+    )
+    previous = token_result.scalar_one_or_none()
+    if previous is None or previous.used_at is not None:
+        raise InvalidActionTokenException()
+
+    organization_role = previous.organization_role
+    await db.execute(
+        update(EmployeeInvitationToken)
+        .where(
+            EmployeeInvitationToken.user_id == user_id,
+            EmployeeInvitationToken.used_at.is_(None),
+        )
+        .values(used_at=now)
+    )
+    raw_token = secrets.token_urlsafe(48)
+    db.add(
+        EmployeeInvitationToken(
+            user_id=user_id,
+            token_hash=hash_token(raw_token),
+            organization_role=organization_role,
+            expires_at=now + timedelta(hours=48),
+        )
+    )
+    await db.commit()
+    return user, raw_token, organization_role

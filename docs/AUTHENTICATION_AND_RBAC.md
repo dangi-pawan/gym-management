@@ -48,7 +48,9 @@ exists.
 3. The employee account is created inactive, with an unusable random password.
    The administrator never chooses or receives the employee's password.
 4. The invitation email contains a one-time token. Only its hash is stored;
-   invitations expire after 48 hours.
+   invitations expire after 48 hours. Pending invitations can be resent through
+`POST /organizations/{organization_id}/employees/{user_id}/invitation/resend`;
+resending invalidates the previous token.
 5. The employee calls `POST /auth/accept-invitation` with the token and their
    own password (minimum 12 characters).
 6. The account becomes active and email-verified. The employee can then log in.
@@ -176,6 +178,7 @@ Defaults are configurable:
 | Organization registration | 3 | 60 minutes per client IP |
 | Password reset request | 3 | 60 minutes per client IP and identity |
 | Verification resend | 3 | 60 minutes per client IP and identity |
+| Employee invitations | 20 | 60 minutes per organization admin |
 
 Login attempts use a dummy Argon2 hash for unknown users to reduce account
 enumeration through response timing. Rate-limit counters are stored in
@@ -274,6 +277,7 @@ port, cookie Secure setting, and browser cookie policy before testing RBAC.
 - [ ] Invitation creates an inactive user with no administrator-known password.
 - [ ] Invitation acceptance sets the employee's own password and verifies email.
 - [ ] Expired/reused invitation tokens are rejected.
+- [ ] Resending an invitation invalidates the previous token.
 - [ ] Deactivating a pending invite invalidates its invitation token.
 
 ### Organization and gym authorization

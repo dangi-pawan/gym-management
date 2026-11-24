@@ -129,14 +129,14 @@ async def login(
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
-    user, access_token, refresh_token, expires_at = await authenticate_employee(
+    _user, access_token, refresh_token, expires_at = await authenticate_employee(
         db,
         organization_slug=credentials.organization_slug,
         email=str(credentials.email),
         password=credentials.password,
     )
     return _login_response(
-        response, user, access_token, refresh_token, expires_at
+        response, access_token, refresh_token, expires_at
     )
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -28,4 +28,12 @@ class Gym(Base):
 
     members: Mapped[list["Member"]] = relationship(
         back_populates="gym"
+    )
+
+    __table_args__ = (
+    UniqueConstraint(
+        "id",
+        "organization_id",
+        name="uq_gyms_id_organization",
+    ),
     )

@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     COOKIE_DOMAIN: str | None = None
     CORS_ORIGINS: list[str] = Field(default_factory=list)
 
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int = Field(default=587, gt=0, le=65535)
+    SMTP_USERNAME: str | None = None
+    SMTP_PASSWORD: str | None = None
+    SMTP_FROM_EMAIL: str | None = None
+    SMTP_STARTTLS: bool = True
+    SMTP_USE_SSL: bool = False
+
     DB_ECHO: bool = False
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20

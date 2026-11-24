@@ -5,6 +5,7 @@ from app.features.users.models import User
 from app.features.users.gym_staff import GymStaff
 from app.features.users.sessions import AuthSession, RefreshToken
 from app.features.users.organization_staff import OrganizationStaff
+from app.features.users.password_reset import PasswordResetToken
 
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "AuthSession",
     "RefreshToken",
     "OrganizationStaff",
+    "PasswordResetToken",
 ]

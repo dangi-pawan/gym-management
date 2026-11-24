@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.exceptions.base import AppException
@@ -21,7 +23,7 @@ async def authenticate_employee(
     organization_slug: str,
     email: str,
     password: str,
-) -> tuple[str, object]:
+) -> tuple[str, datetime]:
     organization = await get_organization_by_slug(db, organization_slug)
     if organization is None:
         raise InvalidCredentialsException()

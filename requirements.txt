@@ -9,3 +9,4 @@ pytest-asyncio
 httpx
 email-validator
 pwdlib[argon2]
+PyJWT

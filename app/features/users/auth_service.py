@@ -172,6 +172,14 @@ async def authenticate_employee(
     rate_key = f"login:{client_ip}:{organization_slug}:{email}"
     organization = await get_organization_by_slug(db, organization_slug)
     if organization is None:
+        verify_password(password, _DUMMY_PASSWORD_HASH)
+        if await increment_auth_rate_limit(
+            db,
+            key=rate_key,
+            max_attempts=settings.LOGIN_MAX_ATTEMPTS,
+            window_minutes=settings.LOGIN_RATE_LIMIT_MINUTES,
+        ):
+            raise AuthenticationRateLimitException()
         raise InvalidCredentialsException()
 
     user = await get_user_by_email(db, organization.id, email)
@@ -459,10 +467,11 @@ async def increment_auth_rate_limit(
                     else_=AuthRateLimit.window_started_at,
                 ),
                 "blocked_until": case(
+                    (AuthRateLimit.blocked_until > now, AuthRateLimit.blocked_until),
                     (
                         and_(
                             AuthRateLimit.window_started_at > cutoff,
-                            AuthRateLimit.attempts >= max_attempts - 1,
+                            AuthRateLimit.attempts >= max_attempts,
                         ),
                         blocked_until,
                     ),

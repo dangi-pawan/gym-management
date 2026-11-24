@@ -89,7 +89,7 @@ async def update_member_endpoint(
     gym_id: int,
     member_id: int,
     member_data: MemberUpdate,
-    _: Annotated[User, Depends(require_gym_roles("manager", "trainer", "receptionist"))],
+    _: Annotated[User, Depends(require_gym_roles("manager", "receptionist"))],
     db: AsyncSession = Depends(get_db),
 ):
     member = await update_member(db, gym_id, member_id, member_data)

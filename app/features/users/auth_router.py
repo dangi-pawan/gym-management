@@ -225,23 +225,6 @@ async def resend_verification(
     )
 
 
-@router.post("/login", response_model=APIResponse[LoginResponse])
-async def login(
-    credentials: LoginRequest,
-    response: Response,
-    db: AsyncSession = Depends(get_db),
-):
-    _user, access_token, refresh_token, expires_at = await authenticate_employee(
-        db,
-        organization_slug=credentials.organization_slug,
-        email=str(credentials.email),
-        password=credentials.password,
-    )
-    return _login_response(
-        response, access_token, refresh_token, expires_at
-    )
-
-
 @router.post(
     "/refresh",
     response_model=APIResponse[RefreshResponse],

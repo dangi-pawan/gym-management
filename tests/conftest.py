@@ -1,3 +1,6 @@
+import re
+from datetime import datetime, timezone
+
 import pytest_asyncio
 
 from httpx import ASGITransport, AsyncClient
@@ -57,6 +60,7 @@ async def organization_id(db_connection):
             full_name="Test Owner",
             email="owner@example.com",
             password_hash=hash_password("OwnerPassword123"),
+            email_verified_at=datetime.now(timezone.utc),
         )
         session.add(owner)
         await session.flush()
@@ -122,3 +126,42 @@ async def create_gym(client, organization_id):
         )
 
     return _create
+
+
+@pytest_asyncio.fixture
+async def invite_employee(client, organization_id, monkeypatch):
+    import app.features.users.router as employee_router_module
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.test")
+    monkeypatch.setattr(settings, "SMTP_FROM_EMAIL", "no-reply@example.test")
+    sent_messages = []
+
+    async def fake_send_email(to_email, subject, body):
+        sent_messages.append((to_email, subject, body))
+
+    monkeypatch.setattr(employee_router_module, "send_email", fake_send_email)
+
+    async def _invite(
+        full_name: str,
+        email: str,
+        organization_role: str | None = None,
+    ):
+        payload = {"full_name": full_name, "email": email}
+        if organization_role is not None:
+            payload["organization_role"] = organization_role
+        response = await client.post(
+            f"/organizations/{organization_id}/employees/invitations",
+            json=payload,
+        )
+        if response.status_code != 202:
+            return response, None
+        token_match = re.search(r"Invitation token: (\\S+)", sent_messages[-1][2])
+        assert token_match is not None
+        accepted = await client.post(
+            "/auth/accept-invitation",
+            json={"token": token_match.group(1), "password": "StrongPassword123"},
+        )
+        return response, accepted
+
+    return _invite

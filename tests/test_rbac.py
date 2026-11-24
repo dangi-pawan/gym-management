@@ -242,3 +242,29 @@ async def test_deactivating_employee_prevents_future_login(
         },
     )
     assert blocked_login.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_owner_can_transfer_ownership_and_old_owner_becomes_admin(
+    client,
+    organization_id,
+    create_gym,
+    invite_employee,
+):
+    await create_gym("Ownership Transfer Gym")
+    invitation, accepted = await invite_employee(
+        "New Owner",
+        "new-owner@example.com",
+    )
+    assert invitation.status_code == 202 and accepted.status_code == 200
+    new_owner_id = invitation.json()["data"]["user_id"]
+
+    transfer = await client.post(
+        f"/organizations/{organization_id}/ownership/transfer",
+        json={"new_owner_user_id": new_owner_id},
+    )
+    assert transfer.status_code == 200
+
+    me = await client.get("/auth/me")
+    assert me.status_code == 200
+    assert me.json()["data"]["organization_role"] == "admin"

@@ -93,4 +93,9 @@ async def delete_organization_endpoint(
             status_code=409,
             detail="Cannot delete organization because it has gyms",
         )
+    if result == "has_users":
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete organization while user accounts exist",
+        )
     return success_response(message="Organization deleted successfully")

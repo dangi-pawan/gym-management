@@ -127,6 +127,7 @@ async def test_prevent_cross_organization_staff_assignment(
     # Create another organization.
     second_organization = Organization(
         name="Another Organization",
+        slug="another-organization",
     )
 
     db_session.add(second_organization)

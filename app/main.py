@@ -1,4 +1,3 @@
-
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException
@@ -21,6 +20,7 @@ from app.common.exceptions.handlers import (
 )
 
 from app.features.organizations.router import router as organizations_router
+from app.features.users.auth_router import router as auth_router
 
 
 @asynccontextmanager
@@ -46,30 +46,15 @@ app = FastAPI(
 )
 
 
-# Global Exception Handlers
-
-app.add_exception_handler(
-    AppException,
-    app_exception_handler,
-)
-
-app.add_exception_handler(
-    RequestValidationError,
-    validation_exception_handler,
-)
-
-app.add_exception_handler(
-    Exception,
-    unexpected_exception_handler,
-)
-
+app.add_exception_handler(AppException, app_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, unexpected_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
+
 
 @app.get("/")
 async def root():
-    return {
-        "message": "Welcome to Gym Management SaaS"
-    }
+    return {"message": "Welcome to Gym Management SaaS"}
 
 
 @app.get("/health/database")
@@ -77,15 +62,13 @@ async def database_health(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(text("SELECT 1"))
-
     return {
         "database": "connected",
         "result": result.scalar(),
     }
 
 
-# Register Routers
-
 app.include_router(organizations_router)
 app.include_router(gyms_router)
 app.include_router(members_router)
+app.include_router(auth_router)

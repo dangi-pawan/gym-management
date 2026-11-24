@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.exceptions.base import AppException
@@ -133,7 +134,7 @@ async def register_organization_owner(
 
     try:
         access, refresh, expires_at = await _issue_session(db, user)
-    except Exception:
+    except IntegrityError:
         await db.rollback()
         raise RegistrationConflictException() from None
 

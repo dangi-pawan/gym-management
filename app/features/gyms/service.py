@@ -4,6 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.features.gyms.models import Gym
 from app.features.gyms.schemas import GymCreate, GymUpdate
 from app.features.members.models import Member
+from app.features.users.gym_staff import GymStaff
+from app.features.users.organization_staff import OrganizationStaff
 
 
 async def create_gym(
@@ -26,24 +28,52 @@ async def get_all_gyms(
     page: int,
     limit: int,
     organization_id: int,
+    user_id: int,
 ):
     offset = (page - 1) * limit
-    query = (
-        select(Gym)
-        .where(Gym.organization_id == organization_id)
-        .order_by(Gym.id)
-        .offset(offset)
-        .limit(limit)
-    )
-    result = await db.execute(query)
-    gyms = result.scalars().all()
-
-    count_result = await db.execute(
-        select(func.count()).select_from(Gym).where(
-            Gym.organization_id == organization_id
+    org_role_result = await db.execute(
+        select(OrganizationStaff.role).where(
+            OrganizationStaff.user_id == user_id,
+            OrganizationStaff.organization_id == organization_id,
+            OrganizationStaff.is_active.is_(True),
         )
     )
-    return gyms, count_result.scalar_one()
+    organization_role = org_role_result.scalar_one_or_none()
+
+    if organization_role in {"owner", "admin"}:
+        base_query = select(Gym).where(Gym.organization_id == organization_id)
+        count_query = select(func.count()).select_from(Gym).where(
+            Gym.organization_id == organization_id
+        )
+    else:
+        base_query = (
+            select(Gym)
+            .join(GymStaff, GymStaff.gym_id == Gym.id)
+            .where(
+                Gym.organization_id == organization_id,
+                GymStaff.organization_id == organization_id,
+                GymStaff.user_id == user_id,
+                GymStaff.is_active.is_(True),
+            )
+        )
+        count_query = (
+            select(func.count())
+            .select_from(Gym)
+            .join(GymStaff, GymStaff.gym_id == Gym.id)
+            .where(
+                Gym.organization_id == organization_id,
+                GymStaff.organization_id == organization_id,
+                GymStaff.user_id == user_id,
+                GymStaff.is_active.is_(True),
+            )
+        )
+
+    result = await db.execute(
+        base_query.order_by(Gym.id).offset(offset).limit(limit)
+    )
+    gyms = result.scalars().all()
+    total = await db.scalar(count_query)
+    return gyms, total
 
 
 async def get_gym_by_id(db: AsyncSession, gym_id: int):

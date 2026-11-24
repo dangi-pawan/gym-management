@@ -55,7 +55,19 @@ CSRF token in the X-CSRF-Token header.
 
 Organization registration creates the first owner. Owners/admins create
 employees through /organizations/{organization_id}/employees and assign
-employees to individual gyms through /gyms/{gym_id}/staff.
+employees to individual gyms through /gyms/{gym_id}/staff. Employees can be
+created with organization_role="admin" to grant organization-wide admin access.
+The owner/admin can deactivate an employee; deactivation revokes that user's
+active sessions. A user can change their password through /auth/change-password.
+
+Password reset uses one-time, hashed, 30-minute tokens. Configure SMTP before
+using /auth/forgot-password:
+- SMTP_HOST and SMTP_FROM_EMAIL
+- SMTP_PORT (587 by default)
+- SMTP_USERNAME and SMTP_PASSWORD when authentication is required
+- SMTP_STARTTLS=true for STARTTLS, or SMTP_USE_SSL=true for implicit TLS
+
+The reset email contains the one-time token to submit to /auth/reset-password.
 
 ### Cookie and CORS configuration
 

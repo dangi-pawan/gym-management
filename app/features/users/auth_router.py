@@ -90,7 +90,6 @@ def _clear_auth_cookies(response: Response) -> None:
 
 def _login_response(
     response: Response,
-    user: User,
     access_token: str,
     refresh_token: str,
     expires_at,
@@ -120,7 +119,7 @@ async def register_organization(
         password=registration.password,
     )
     return _login_response(
-        response, user, access_token, refresh_token, expires_at
+        response, access_token, refresh_token, expires_at
     )
 
 

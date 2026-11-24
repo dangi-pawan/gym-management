@@ -21,7 +21,7 @@ from app.features.gyms.service import (
     update_gym,
     delete_gym,
 )
-from app.features.users.dependencies import require_gym_roles, require_org_roles
+from app.features.users.dependencies import get_current_user, require_gym_roles, require_org_roles
 from app.features.users.models import User
 
 
@@ -43,13 +43,13 @@ async def create_gym_endpoint(
 
 @router.get("/", response_model=GymListResponse)
 async def get_all_gyms_endpoint(
-    current_user: Annotated[User, Depends(require_org_roles("owner", "admin"))],
+    current_user: Annotated[User, Depends(get_current_user)],
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ):
     gyms, total = await get_all_gyms(
-        db, page, limit, current_user.organization_id
+        db, page, limit, current_user.organization_id, current_user.id
     )
     data = GymListData(
         gyms=[GymResponse.model_validate(gym) for gym in gyms],

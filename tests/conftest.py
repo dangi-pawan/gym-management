@@ -156,7 +156,7 @@ async def invite_employee(client, organization_id, monkeypatch):
         )
         if response.status_code != 202:
             return response, None
-        token_match = re.search(r"Invitation token: (\\S+)", sent_messages[-1][2])
+        token_match = re.search(r"Invitation token: (\S+)", sent_messages[-1][2])
         assert token_match is not None
         accepted = await client.post(
             "/auth/accept-invitation",

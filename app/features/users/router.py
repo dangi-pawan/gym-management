@@ -28,6 +28,12 @@ class EmployeeStatusUpdate(BaseModel):
     is_active: bool
 
 
+
+class OwnershipTransferRequest(BaseModel):
+    new_owner_user_id: int
+
+
+
 @router.post("/invitations", status_code=status.HTTP_202_ACCEPTED)
 async def invite_employee_endpoint(
     organization_id: int,
@@ -39,6 +45,18 @@ async def invite_employee_endpoint(
         raise HTTPException(status_code=404, detail="Organization not found")
     if not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL:
         raise HTTPException(status_code=503, detail="Email delivery is not configured")
+    current_role = await db.scalar(
+        select(OrganizationStaff.role).where(
+            OrganizationStaff.user_id == current_user.id,
+            OrganizationStaff.organization_id == organization_id,
+            OrganizationStaff.is_active.is_(True),
+        )
+    )
+    if invitation_data.organization_role == "admin" and current_role != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail="Only an organization owner can invite another organization admin",
+        )
 
     employee, raw_token = await create_employee_invitation(
         db,
@@ -144,11 +162,76 @@ async def update_employee_status(
             )
 
     employee.is_active = status_data.is_active
-    await db.commit()
     if not employee.is_active:
         await revoke_user_sessions(db, employee.id)
+    else:
+        await db.commit()
     await db.refresh(employee)
     return success_response(
         message="Employee status updated successfully",
         data=UserResponse.model_validate(employee),
+    )
+
+
+@router.post("/ownership/transfer")
+async def transfer_organization_ownership(
+    organization_id: int,
+    transfer: OwnershipTransferRequest,
+    current_user: Annotated[User, Depends(require_org_roles("owner"))],
+    db: AsyncSession = Depends(get_db),
+):
+    if organization_id != current_user.organization_id:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    if transfer.new_owner_user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="You are already the owner")
+
+    target_result = await db.execute(
+        select(User).where(
+            User.id == transfer.new_owner_user_id,
+            User.organization_id == current_user.organization_id,
+            User.is_active.is_(True),
+            User.email_verified_at.is_not(None),
+        )
+    )
+    target = target_result.scalar_one_or_none()
+    if target is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Active, email-verified employee not found",
+        )
+
+    current_assignment_result = await db.execute(
+        select(OrganizationStaff).where(
+            OrganizationStaff.user_id == current_user.id,
+            OrganizationStaff.organization_id == current_user.organization_id,
+            OrganizationStaff.is_active.is_(True),
+        ).with_for_update()
+    )
+    current_assignment = current_assignment_result.scalar_one()
+
+    target_assignment_result = await db.execute(
+        select(OrganizationStaff).where(
+            OrganizationStaff.user_id == target.id,
+            OrganizationStaff.organization_id == current_user.organization_id,
+        ).with_for_update()
+    )
+    target_assignment = target_assignment_result.scalar_one_or_none()
+
+    current_assignment.role = "admin"
+    if target_assignment is None:
+        db.add(
+            OrganizationStaff(
+                user_id=target.id,
+                organization_id=current_user.organization_id,
+                role="owner",
+                is_active=True,
+            )
+        )
+    else:
+        target_assignment.role = "owner"
+        target_assignment.is_active = True
+
+    await db.commit()
+    return success_response(
+        message="Organization ownership transferred successfully"
     )

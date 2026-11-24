@@ -30,7 +30,11 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["user_id", "organization_id"],
+            ["users.id", "users.organization_id"],
+            name="fk_auth_sessions_user_organization",
+        ),
     )
     op.create_index("ix_auth_sessions_user_id", "auth_sessions", ["user_id"])
     op.create_index(

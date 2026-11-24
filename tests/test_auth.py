@@ -179,3 +179,65 @@ async def test_mutating_cookie_authenticated_request_requires_csrf(client):
     # refresh cannot be invoked without the double-submit CSRF header.
     response = await client.post("/auth/refresh")
     assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_password_change_revokes_existing_sessions(
+    client,
+    organization_id,
+    db_connection,
+):
+    await _create_employee(db_connection, organization_id)
+    login = await client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "test-organization",
+            "email": "employee@example.com",
+            "password": "StrongPassword123",
+        },
+    )
+    csrf = login.json()["data"]["csrf_token"]
+    changed = await client.post(
+        "/auth/change-password",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "current_password": "StrongPassword123",
+            "new_password": "AnotherStrongPassword123",
+        },
+    )
+    assert changed.status_code == 200
+    assert (await client.get("/auth/me")).status_code == 401
+
+    relogin = await client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "test-organization",
+            "email": "employee@example.com",
+            "password": "AnotherStrongPassword123",
+        },
+    )
+    assert relogin.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_session(
+    client,
+    organization_id,
+    db_connection,
+):
+    await _create_employee(db_connection, organization_id)
+    login = await client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "test-organization",
+            "email": "employee@example.com",
+            "password": "StrongPassword123",
+        },
+    )
+    csrf = login.json()["data"]["csrf_token"]
+    logout = await client.post(
+        "/auth/logout",
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert logout.status_code == 200
+    assert (await client.get("/auth/me")).status_code == 401

@@ -24,3 +24,57 @@ and shared schema.
 ## Project Status
 
 Currently under development.
+
+## Authentication and authorization
+
+Authentication uses short-lived JWT access tokens and rotating opaque refresh
+tokens stored in server-side sessions. Both authentication tokens are delivered
+only as HttpOnly cookies; they are not returned in API response bodies.
+State-changing cookie-authenticated requests require the signed double-submit
+CSRF token in the X-CSRF-Token header.
+
+### Local Swagger testing
+
+1. Apply database migrations:
+
+   ```
+   ENV_FILE=.env.test alembic upgrade head
+   ```
+
+   Use .env instead of .env.test when applying migrations to your
+   development database.
+
+2. Start the API and open /docs on the same host and port.
+3. Register an organization through POST /auth/register, or log in through
+   POST /auth/login. The browser stores the access, refresh, and CSRF cookies.
+4. Copy the data.csrf_token value from the login/register response.
+5. For POST, PUT, PATCH, and DELETE operations, provide that value in the
+   X-CSRF-Token header. Swagger exposes this header on protected operations.
+6. Use POST /auth/refresh to rotate the refresh token, and
+   POST /auth/logout to revoke the current session.
+
+Organization registration creates the first owner. Owners/admins create
+employees through /organizations/{organization_id}/employees and assign
+employees to individual gyms through /gyms/{gym_id}/staff.
+
+### Cookie and CORS configuration
+
+Local HTTP development defaults to COOKIE_SECURE=false and
+COOKIE_SAMESITE=lax. Production must set:
+
+- COOKIE_SECURE=true
+- COOKIE_SAMESITE=lax for same-site frontend/API deployments
+- CORS_ORIGINS='["https://app.example.com"]' for the exact frontend origin
+- COOKIE_DOMAIN only if a shared parent-domain cookie is deliberately needed
+
+CORS credentials are enabled only for the configured origins. Never use a
+wildcard origin with credentialed cookies. Keep JWT_SECRET_KEY private and
+at least 32 characters long.
+
+### Automated tests
+
+Always run the test suite against the test database:
+
+```
+ENV_FILE=.env.test pytest -q
+```

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, ForeignKeyConstraint, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -9,9 +9,16 @@ from app.db.base import Base
 class AuthSession(Base):
     __tablename__ = "auth_sessions"
 
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "organization_id"],
+            ["users.id", "users.organization_id"],
+            name="fk_auth_sessions_user_organization",
+        ),
+    )
+
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

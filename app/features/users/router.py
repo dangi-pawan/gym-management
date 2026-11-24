@@ -13,7 +13,6 @@ from app.features.users.models import User
 from app.features.users.organization_staff import OrganizationStaff
 from app.features.users.schemas import UserResponse
 from app.features.users.auth_schemas import EmployeeInvitationCreate
-from app.features.users.account_tokens import EmployeeInvitationToken
 from app.features.users.auth_service import (
     create_employee_invitation,
     resend_employee_invitation,

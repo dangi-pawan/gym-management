@@ -397,3 +397,90 @@ async def test_deactivating_pending_invitation_invalidates_token(
         json={"token": token, "password": "StrongPassword123"},
     )
     assert accepted.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_resending_invitation_invalidates_previous_token(
+    client,
+    organization_id,
+    create_gym,
+    monkeypatch,
+):
+    import app.features.users.router as employee_router_module
+
+    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.test")
+    monkeypatch.setattr(settings, "SMTP_FROM_EMAIL", "no-reply@example.test")
+    sent = []
+
+    async def fake_send_email(to_email, subject, body):
+        sent.append(body)
+
+    monkeypatch.setattr(employee_router_module, "send_email", fake_send_email)
+    await create_gym("Invitation Resend Gym")
+
+    invited = await client.post(
+        f"/organizations/{organization_id}/employees/invitations",
+        json={"full_name": "Pending Employee", "email": "pending@example.com"},
+    )
+    assert invited.status_code == 202
+    user_id = invited.json()["data"]["user_id"]
+    old_token = re.search(r"Invitation token: (\S+)", sent[-1]).group(1)
+
+    resent = await client.post(
+        f"/organizations/{organization_id}/employees/{user_id}/invitation/resend"
+    )
+    assert resent.status_code == 202
+    new_token = re.search(r"Invitation token: (\S+)", sent[-1]).group(1)
+    assert new_token != old_token
+
+    old_acceptance = await client.post(
+        "/auth/accept-invitation",
+        json={"token": old_token, "password": "StrongPassword123"},
+    )
+    assert old_acceptance.status_code == 400
+
+    new_acceptance = await client.post(
+        "/auth/accept-invitation",
+        json={"token": new_token, "password": "StrongPassword123"},
+    )
+    assert new_acceptance.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_deactivating_pending_invitation_invalidates_token(
+    client,
+    organization_id,
+    create_gym,
+    monkeypatch,
+):
+    import app.features.users.router as employee_router_module
+
+    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.test")
+    monkeypatch.setattr(settings, "SMTP_FROM_EMAIL", "no-reply@example.test")
+    sent = []
+
+    async def fake_send_email(to_email, subject, body):
+        sent.append(body)
+
+    monkeypatch.setattr(employee_router_module, "send_email", fake_send_email)
+    await create_gym("Pending Deactivation Gym")
+
+    invited = await client.post(
+        f"/organizations/{organization_id}/employees/invitations",
+        json={"full_name": "Pending Employee", "email": "pending-deactivate@example.com"},
+    )
+    assert invited.status_code == 202
+    user_id = invited.json()["data"]["user_id"]
+    token = re.search(r"Invitation token: (\S+)", sent[-1]).group(1)
+
+    deactivated = await client.patch(
+        f"/organizations/{organization_id}/employees/{user_id}/status",
+        json={"is_active": False},
+    )
+    assert deactivated.status_code == 200
+
+    accepted = await client.post(
+        "/auth/accept-invitation",
+        json={"token": token, "password": "StrongPassword123"},
+    )
+    assert accepted.status_code == 400

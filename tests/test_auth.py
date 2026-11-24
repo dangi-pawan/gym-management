@@ -1,8 +1,12 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
 from app.features.users.schemas import UserCreate
+from app.features.users.sessions import AuthSession
 from app.features.users.service import create_user
 
 
@@ -264,6 +268,16 @@ async def test_password_reset_uses_single_use_email_token(
 
     monkeypatch.setattr(auth_router_module, "send_email", fake_send_email)
 
+    initial_login = await client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "test-organization",
+            "email": "employee@example.com",
+            "password": "StrongPassword123",
+        },
+    )
+    assert initial_login.status_code == 200
+
     forgot = await client.post(
         "/auth/forgot-password",
         json={
@@ -284,6 +298,7 @@ async def test_password_reset_uses_single_use_email_token(
         },
     )
     assert reset.status_code == 200
+    assert (await client.get("/auth/me")).status_code == 401
 
     reused = await client.post(
         "/auth/reset-password",
@@ -440,4 +455,73 @@ async def test_logout_all_revokes_every_session(
         headers={"X-CSRF-Token": csrf},
     )
     assert logout_all.status_code == 200
+    assert (await client.get("/auth/me")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_csrf_header_must_match_signed_cookie(
+    client,
+    organization_id,
+    db_connection,
+):
+    await _create_employee(db_connection, organization_id)
+    login = await client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "test-organization",
+            "email": "employee@example.com",
+            "password": "StrongPassword123",
+        },
+    )
+    assert login.status_code == 200
+
+    rejected = await client.post(
+        "/auth/change-password",
+        headers={"X-CSRF-Token": "forged-token"},
+        json={
+            "current_password": "StrongPassword123",
+            "new_password": "AnotherStrongPassword123",
+        },
+    )
+    assert rejected.status_code == 403
+    assert (await client.get("/auth/me")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_refresh_cannot_extend_absolute_session_lifetime(
+    client,
+    organization_id,
+    db_connection,
+):
+    await _create_employee(db_connection, organization_id)
+    login = await client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "test-organization",
+            "email": "employee@example.com",
+            "password": "StrongPassword123",
+        },
+    )
+    assert login.status_code == 200
+
+    session_factory = async_sessionmaker(
+        bind=db_connection,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autoflush=False,
+        join_transaction_mode="create_savepoint",
+    )
+    async with session_factory() as session:
+        auth_session = await session.scalar(
+            select(AuthSession).where(AuthSession.user_id > 0).order_by(AuthSession.id.desc())
+        )
+        assert auth_session is not None
+        auth_session.absolute_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        await session.commit()
+
+    refresh = await client.post(
+        "/auth/refresh",
+        headers={"X-CSRF-Token": login.json()["data"]["csrf_token"]},
+    )
+    assert refresh.status_code == 401
     assert (await client.get("/auth/me")).status_code == 401

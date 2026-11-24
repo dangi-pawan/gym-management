@@ -6,7 +6,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.responses.helpers import success_response
-from app.core.security import hash_password
 from app.db.session import get_db
 from app.features.users.auth_service import revoke_user_sessions
 from app.features.users.dependencies import require_org_roles

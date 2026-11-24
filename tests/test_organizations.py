@@ -1,7 +1,21 @@
+import re
+
 import pytest
 
 
-async def _register(client, organization_name):
+async def _register(client, organization_name, monkeypatch):
+    import app.features.users.auth_router as auth_router_module
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.test")
+    monkeypatch.setattr(settings, "SMTP_FROM_EMAIL", "no-reply@example.test")
+    sent = []
+
+    async def fake_send_email(to_email, subject, body):
+        sent.append(body)
+
+    monkeypatch.setattr(auth_router_module, "send_email", fake_send_email)
+
     response = await client.post(
         "/auth/register",
         json={
@@ -11,9 +25,12 @@ async def _register(client, organization_name):
             "password": "StrongPassword123",
         },
     )
-    assert response.status_code == 200
-    client.headers["X-CSRF-Token"] = response.json()["data"]["csrf_token"]
-    return response
+    assert response.status_code == 202
+    token = re.search(r"Verification token: (\\S+)", sent[-1]).group(1)
+    verified = await client.post("/auth/verify-email", json={"token": token})
+    assert verified.status_code == 200
+    client.headers["X-CSRF-Token"] = verified.json()["data"]["csrf_token"]
+    return verified
 
 
 async def _current_organization(client):
@@ -23,8 +40,11 @@ async def _current_organization(client):
 
 
 @pytest.mark.asyncio
-async def test_register_organization_creates_owner_and_session(client):
-    response = await _register(client, "Test Organization")
+async def test_register_organization_creates_owner_and_requires_verification(
+    client,
+    monkeypatch,
+):
+    response = await _register(client, "Test Organization", monkeypatch)
     assert response.json()["success"] is True
     assert response.json()["data"]["csrf_token"]
 
@@ -34,10 +54,10 @@ async def test_register_organization_creates_owner_and_session(client):
 
 
 @pytest.mark.asyncio
-async def test_organization_listing_is_tenant_scoped(client):
-    await _register(client, "Organization One")
+async def test_organization_listing_is_tenant_scoped(client, monkeypatch):
+    await _register(client, "Organization One", monkeypatch)
     first = await _current_organization(client)
-    await _register(client, "Organization Two")
+    await _register(client, "Organization Two", monkeypatch)
     second = await _current_organization(client)
 
     assert first["name"] == "Organization One"
@@ -46,8 +66,8 @@ async def test_organization_listing_is_tenant_scoped(client):
 
 
 @pytest.mark.asyncio
-async def test_get_organization_by_id(client):
-    await _register(client, "Get Organization")
+async def test_get_organization_by_id(client, monkeypatch):
+    await _register(client, "Get Organization", monkeypatch)
     organization = await _current_organization(client)
 
     response = await client.get(f"/organizations/{organization['id']}")
@@ -56,8 +76,8 @@ async def test_get_organization_by_id(client):
 
 
 @pytest.mark.asyncio
-async def test_update_organization(client):
-    await _register(client, "Old Organization")
+async def test_update_organization(client, monkeypatch):
+    await _register(client, "Old Organization", monkeypatch)
     organization = await _current_organization(client)
 
     response = await client.put(
@@ -70,8 +90,11 @@ async def test_update_organization(client):
 
 
 @pytest.mark.asyncio
-async def test_cannot_delete_organization_while_owner_account_exists(client):
-    await _register(client, "Delete Organization")
+async def test_cannot_delete_organization_while_owner_account_exists(
+    client,
+    monkeypatch,
+):
+    await _register(client, "Delete Organization", monkeypatch)
     organization = await _current_organization(client)
 
     response = await client.delete(f"/organizations/{organization['id']}")
@@ -93,10 +116,10 @@ async def test_cannot_delete_organization_with_gyms(
 
 
 @pytest.mark.asyncio
-async def test_cross_tenant_organization_access_is_hidden(client):
-    await _register(client, "Organization One")
+async def test_cross_tenant_organization_access_is_hidden(client, monkeypatch):
+    await _register(client, "Organization One", monkeypatch)
     first = await _current_organization(client)
-    await _register(client, "Organization Two")
+    await _register(client, "Organization Two", monkeypatch)
 
     response = await client.get(f"/organizations/{first['id']}")
     assert response.status_code == 404

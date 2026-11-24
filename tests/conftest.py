@@ -13,6 +13,7 @@ from app.main import app
 
 from app.features.organizations.models import Organization
 
+
 @pytest_asyncio.fixture
 async def db_connection():
     test_engine = create_async_engine(
@@ -42,7 +43,10 @@ async def organization_id(db_connection):
     )
 
     async with TestSessionLocal() as session:
-        organization = Organization(name="Test Organization")
+        organization = Organization(
+            name="Test Organization",
+            slug="test-organization",
+        )
 
         session.add(organization)
         await session.commit()

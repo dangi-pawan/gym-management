@@ -93,3 +93,52 @@ async def test_employee_login_rejects_unknown_organization(client):
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "INVALID_CREDENTIALS"
+
+
+
+@pytest.mark.asyncio
+async def test_authenticated_employee_endpoint_returns_current_user(
+    client,
+    organization_id,
+    db_connection,
+):
+    await _create_employee(db_connection, organization_id)
+
+    login_response = await client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "test-organization",
+            "email": "employee@example.com",
+            "password": "StrongPassword123",
+        },
+    )
+    access_token = login_response.json()["data"]["access_token"]
+
+    response = await client.get(
+        "/auth/me",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"]["email"] == "employee@example.com"
+    assert payload["data"]["organization_id"] == organization_id
+
+
+@pytest.mark.asyncio
+async def test_authenticated_employee_endpoint_rejects_missing_token(client):
+    response = await client.get("/auth/me")
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
+
+
+@pytest.mark.asyncio
+async def test_authenticated_employee_endpoint_rejects_invalid_token(client):
+    response = await client.get(
+        "/auth/me",
+        headers={"Authorization": "Bearer not-a-valid-token"},
+    )
+
+    assert response.status_code == 401

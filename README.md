@@ -27,6 +27,13 @@ Currently under development.
 
 ## Authentication and authorization
 
+See [Authentication and RBAC documentation](docs/AUTHENTICATION_AND_RBAC.md)
+for the full lifecycle, role matrix, security configuration, Swagger workflow,
+and scenario checklist. A local environment template is provided at
+[.env.example](.env.example).
+
+
+
 Authentication uses short-lived JWT access tokens and rotating opaque refresh
 tokens stored in server-side sessions. Both authentication tokens are delivered
 only as HttpOnly cookies; they are not returned in API response bodies.

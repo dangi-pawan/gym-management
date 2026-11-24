@@ -330,3 +330,114 @@ async def test_authenticated_mutation_rejects_missing_csrf_header(
         },
     )
     assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_owner_registration_requires_email_verification(
+    client,
+    monkeypatch,
+):
+    import re
+    import app.features.users.auth_router as auth_router_module
+
+    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.test")
+    monkeypatch.setattr(settings, "SMTP_FROM_EMAIL", "no-reply@example.test")
+    sent = []
+
+    async def fake_send_email(to_email, subject, body):
+        sent.append(body)
+
+    monkeypatch.setattr(auth_router_module, "send_email", fake_send_email)
+
+    registration = await client.post(
+        "/auth/register",
+        json={
+            "organization_name": "Verified Club",
+            "full_name": "Verified Owner",
+            "email": "verified@example.com",
+            "password": "StrongPassword123",
+        },
+    )
+    assert registration.status_code == 202
+    assert registration.json()["data"]["email_verification_required"] is True
+
+    before_verification = await client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "verified-club",
+            "email": "verified@example.com",
+            "password": "StrongPassword123",
+        },
+    )
+    assert before_verification.status_code == 401
+
+    token = re.search(r"Verification token: (\\S+)", sent[-1]).group(1)
+    verified = await client.post("/auth/verify-email", json={"token": token})
+    assert verified.status_code == 200
+    assert verified.json()["data"]["csrf_token"]
+
+    me = await client.get("/auth/me")
+    assert me.status_code == 200
+
+    reused = await client.post("/auth/verify-email", json={"token": token})
+    assert reused.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_login_is_rate_limited_after_configured_failures(
+    client,
+    organization_id,
+    db_connection,
+    monkeypatch,
+):
+    await _create_employee(db_connection, organization_id)
+    monkeypatch.setattr(settings, "LOGIN_MAX_ATTEMPTS", 2)
+
+    payload = {
+        "organization_slug": "test-organization",
+        "email": "employee@example.com",
+        "password": "WrongPassword123",
+    }
+    first = await client.post("/auth/login", json=payload)
+    second = await client.post("/auth/login", json=payload)
+    third = await client.post("/auth/login", json=payload)
+
+    assert first.status_code == 401
+    assert second.status_code == 401
+    assert third.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_logout_all_revokes_every_session(
+    client,
+    organization_id,
+    db_connection,
+):
+    await _create_employee(db_connection, organization_id)
+    first = await client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "test-organization",
+            "email": "employee@example.com",
+            "password": "StrongPassword123",
+        },
+    )
+    first_access = client.cookies.get(settings.ACCESS_TOKEN_COOKIE_NAME)
+
+    second_client = client
+    second = await second_client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "test-organization",
+            "email": "employee@example.com",
+            "password": "StrongPassword123",
+        },
+    )
+    assert first.status_code == 200 and second.status_code == 200
+    csrf = second.json()["data"]["csrf_token"]
+    logout_all = await client.post(
+        "/auth/logout-all",
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert logout_all.status_code == 200
+    assert (await client.get("/auth/me")).status_code == 401

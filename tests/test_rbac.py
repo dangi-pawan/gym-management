@@ -268,3 +268,45 @@ async def test_owner_can_transfer_ownership_and_old_owner_becomes_admin(
     me = await client.get("/auth/me")
     assert me.status_code == 200
     assert me.json()["data"]["organization_role"] == "admin"
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_invite_another_organization_admin(
+    client,
+    organization_id,
+    create_gym,
+    invite_employee,
+):
+    await create_gym("Admin Invitation Gym")
+    admin_invitation, accepted = await invite_employee(
+        "Organization Admin",
+        "org-admin@example.com",
+        organization_role="admin",
+    )
+    assert admin_invitation.status_code == 202
+    assert accepted.status_code == 200
+
+    await client.post(
+        "/auth/logout",
+        headers={"X-CSRF-Token": client.cookies.get(settings.CSRF_TOKEN_COOKIE_NAME)},
+    )
+    admin_login = await client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "test-organization",
+            "email": "org-admin@example.com",
+            "password": "StrongPassword123",
+        },
+    )
+    assert admin_login.status_code == 200
+    client.headers["X-CSRF-Token"] = admin_login.json()["data"]["csrf_token"]
+
+    response = await client.post(
+        f"/organizations/{organization_id}/employees/invitations",
+        json={
+            "full_name": "Second Admin",
+            "email": "second-admin@example.com",
+            "organization_role": "admin",
+        },
+    )
+    assert response.status_code == 403

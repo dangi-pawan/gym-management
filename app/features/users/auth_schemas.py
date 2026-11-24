@@ -19,6 +19,26 @@ class LoginRequest(BaseModel):
         return value.strip().lower()
 
 
+class RegisterOrganizationRequest(BaseModel):
+    organization_name: str = Field(min_length=2, max_length=150)
+    full_name: str = Field(min_length=2, max_length=120)
+    email: EmailStr
+    password: str = Field(min_length=12, max_length=128)
+
+    @field_validator("organization_name", "full_name")
+    @classmethod
+    def strip_names(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("This field cannot be empty")
+        return value
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+
 class LoginResponse(BaseModel):
     csrf_token: str
     access_expires_at: datetime

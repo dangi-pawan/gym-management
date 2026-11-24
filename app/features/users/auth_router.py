@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.responses.helpers import success_response
@@ -12,9 +12,11 @@ from app.features.users.auth_schemas import (
     LoginRequest,
     LoginResponse,
     RefreshResponse,
+    RegisterOrganizationRequest,
 )
 from app.features.users.auth_service import (
     authenticate_employee,
+    register_organization_owner,
     revoke_refresh_session,
     rotate_refresh_token,
 )
@@ -69,14 +71,44 @@ def _clear_auth_cookies(response: Response) -> None:
         "samesite": settings.COOKIE_SAMESITE,
         "domain": settings.COOKIE_DOMAIN,
     }
-    response.delete_cookie(
-        settings.ACCESS_TOKEN_COOKIE_NAME, path="/", **common
+    response.delete_cookie(settings.ACCESS_TOKEN_COOKIE_NAME, path="/", **common)
+    response.delete_cookie(settings.REFRESH_TOKEN_COOKIE_NAME, path="/auth", **common)
+    response.delete_cookie(settings.CSRF_TOKEN_COOKIE_NAME, path="/", **common)
+
+
+def _login_response(
+    response: Response,
+    user: User,
+    access_token: str,
+    refresh_token: str,
+    expires_at,
+):
+    csrf_token = create_csrf_token()
+    _set_auth_cookies(response, access_token, refresh_token, csrf_token)
+    return success_response(
+        message="Authentication successful",
+        data=LoginResponse(
+            csrf_token=csrf_token,
+            access_expires_at=expires_at,
+        ),
     )
-    response.delete_cookie(
-        settings.REFRESH_TOKEN_COOKIE_NAME, path="/auth", **common
+
+
+@router.post("/register", response_model=APIResponse[LoginResponse])
+async def register_organization(
+    registration: RegisterOrganizationRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    user, access_token, refresh_token, expires_at = await register_organization_owner(
+        db,
+        organization_name=registration.organization_name,
+        full_name=registration.full_name,
+        email=str(registration.email),
+        password=registration.password,
     )
-    response.delete_cookie(
-        settings.CSRF_TOKEN_COOKIE_NAME, path="/", **common
+    return _login_response(
+        response, user, access_token, refresh_token, expires_at
     )
 
 
@@ -92,14 +124,8 @@ async def login(
         email=str(credentials.email),
         password=credentials.password,
     )
-    csrf_token = create_csrf_token()
-    _set_auth_cookies(response, access_token, refresh_token, csrf_token)
-    return success_response(
-        message="Login successful",
-        data=LoginResponse(
-            csrf_token=csrf_token,
-            access_expires_at=expires_at,
-        ),
+    return _login_response(
+        response, user, access_token, refresh_token, expires_at
     )
 
 

@@ -19,6 +19,44 @@ def _slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", ascii_value.lower()).strip("-")
     return slug or "organization"
 
+def _is_slug_unique_violation(exc: IntegrityError) -> bool:
+    """Recognize the slug unique violation across SQLAlchemy/asyncpg wrappers."""
+    pending = [exc.orig]
+    seen = set()
+
+    while pending:
+        error = pending.pop()
+        if error is None or id(error) in seen:
+            continue
+        seen.add(id(error))
+
+        constraint_name = (
+            getattr(error, "constraint_name", None)
+            or getattr(getattr(error, "diag", None), "constraint_name", None)
+        )
+        sqlstate = (
+            getattr(error, "sqlstate", None)
+            or getattr(error, "pgcode", None)
+        )
+        message = str(error)
+
+        if constraint_name == "uq_organizations_slug":
+            return True
+        if (
+            sqlstate == "23505"
+            and "uq_organizations_slug" in message
+        ):
+            return True
+
+        pending.extend(
+            [
+                getattr(error, "__cause__", None),
+                getattr(error, "__context__", None),
+            ]
+        )
+
+    return False
+
 
 async def create_organization(
     db: AsyncSession,
@@ -41,15 +79,7 @@ async def create_organization(
             await db.commit()
         except IntegrityError as exc:
             await db.rollback()
-            constraint_name = (
-                getattr(exc.orig, "constraint_name", None)
-                or getattr(
-                    getattr(exc.orig, "diag", None),
-                    "constraint_name",
-                    None,
-                )
-            )
-            if constraint_name != "uq_organizations_slug":
+            if not _is_slug_unique_violation(exc):
                 raise
             continue
 

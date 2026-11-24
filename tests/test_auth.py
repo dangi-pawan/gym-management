@@ -303,3 +303,30 @@ async def test_password_reset_uses_single_use_email_token(
         },
     )
     assert login.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_authenticated_mutation_rejects_missing_csrf_header(
+    client,
+    organization_id,
+    db_connection,
+):
+    await _create_employee(db_connection, organization_id)
+    login = await client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "test-organization",
+            "email": "employee@example.com",
+            "password": "StrongPassword123",
+        },
+    )
+    assert login.status_code == 200
+
+    response = await client.post(
+        "/auth/change-password",
+        json={
+            "current_password": "StrongPassword123",
+            "new_password": "AnotherStrongPassword123",
+        },
+    )
+    assert response.status_code == 403

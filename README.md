@@ -51,7 +51,10 @@ CSRF token in the X-CSRF-Token header.
 5. For POST, PUT, PATCH, and DELETE operations, provide that value in the
    X-CSRF-Token header. Swagger exposes this header on protected operations.
 6. Use POST /auth/refresh to rotate the refresh token, and
-   POST /auth/logout to revoke the current session.
+   POST /auth/logout to revoke the current session. Refresh returns a new CSRF
+   token; replace the header value with it.
+7. Use POST /auth/logout-all to revoke all of the user's sessions. Password
+   change and password reset also revoke every active session.
 
 Organization registration creates the first owner. Owners/admins create
 employees through /organizations/{organization_id}/employees and assign
@@ -78,6 +81,7 @@ COOKIE_SAMESITE=lax. Production must set:
 - COOKIE_SAMESITE=lax for same-site frontend/API deployments
 - CORS_ORIGINS='["https://app.example.com"]' for the exact frontend origin
 - COOKIE_DOMAIN only if a shared parent-domain cookie is deliberately needed
+- CSRF_SECRET_KEY may be a separate random key of at least 32 characters
 - SMTP_HOST, SMTP_PORT, SMTP_FROM_EMAIL, and SMTP authentication/TLS values for password reset
 
 CORS credentials are enabled only for the configured origins. A browser

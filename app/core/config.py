@@ -12,7 +12,13 @@ class Settings(BaseSettings):
     CSRF_SECRET_KEY: str | None = Field(default=None, min_length=32)
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=15, gt=0, le=1440)
-    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=14, gt=0, le=90)
+    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=14, gt=0, le=30)
+    REFRESH_TOKEN_MAX_DAYS: int = Field(default=30, gt=0, le=90)
+    LOGIN_MAX_ATTEMPTS: int = Field(default=5, gt=0, le=20)
+    LOGIN_RATE_LIMIT_MINUTES: int = Field(default=15, gt=0, le=1440)
+    PASSWORD_RESET_MAX_REQUESTS: int = Field(default=3, gt=0, le=20)
+    PASSWORD_RESET_RATE_LIMIT_MINUTES: int = Field(default=60, gt=0, le=1440)
+    APP_ENV: Literal["development", "test", "production"] = "development"
 
     ACCESS_TOKEN_COOKIE_NAME: str = "access_token"
     REFRESH_TOKEN_COOKIE_NAME: str = "refresh_token"
@@ -40,6 +46,12 @@ class Settings(BaseSettings):
     def validate_cookie_settings(self):
         if self.COOKIE_SAMESITE == "none" and not self.COOKIE_SECURE:
             raise ValueError("COOKIE_SECURE must be true when COOKIE_SAMESITE is 'none'")
+        if self.APP_ENV == "production" and not self.COOKIE_SECURE:
+            raise ValueError("COOKIE_SECURE must be true in production")
+        if self.APP_ENV == "production" and not self.CORS_ORIGINS:
+            raise ValueError("CORS_ORIGINS must be configured in production")
+        if self.REFRESH_TOKEN_MAX_DAYS < self.REFRESH_TOKEN_EXPIRE_DAYS:
+            raise ValueError("REFRESH_TOKEN_MAX_DAYS must be >= REFRESH_TOKEN_EXPIRE_DAYS")
         return self
 
     model_config = SettingsConfigDict(

@@ -41,10 +41,13 @@ async def create_organization(
             await db.commit()
         except IntegrityError as exc:
             await db.rollback()
-            constraint_name = getattr(
-                getattr(exc.orig, "diag", None),
-                "constraint_name",
-                None,
+            constraint_name = (
+                getattr(exc.orig, "constraint_name", None)
+                or getattr(
+                    getattr(exc.orig, "diag", None),
+                    "constraint_name",
+                    None,
+                )
             )
             if constraint_name != "uq_organizations_slug":
                 raise

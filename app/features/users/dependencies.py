@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Annotated, Any
 
 import jwt
@@ -55,19 +56,17 @@ async def get_current_user(
     except (TypeError, ValueError):
         raise _unauthorized() from None
 
+    now = datetime.now(timezone.utc)
     session_result = await db.execute(
         select(AuthSession).where(
             AuthSession.id == session_id,
             AuthSession.user_id == user_id,
             AuthSession.organization_id == organization_id,
             AuthSession.revoked_at.is_(None),
-            AuthSession.expires_at > __import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            ),
+            AuthSession.expires_at > now,
         )
     )
-    auth_session = session_result.scalar_one_or_none()
-    if auth_session is None:
+    if session_result.scalar_one_or_none() is None:
         raise _unauthorized()
 
     if request.method not in {"GET", "HEAD", "OPTIONS", "TRACE"}:

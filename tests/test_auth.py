@@ -1,4 +1,3 @@
-import jwt
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -28,7 +27,7 @@ async def _create_employee(db_connection, organization_id):
 
 
 @pytest.mark.asyncio
-async def test_employee_login_returns_access_token(
+async def test_employee_login_sets_http_only_auth_cookies(
     client,
     organization_id,
     db_connection,
@@ -47,16 +46,17 @@ async def test_employee_login_returns_access_token(
     assert response.status_code == 200
     payload = response.json()
     assert payload["success"] is True
-    assert payload["data"]["token_type"] == "bearer"
+    assert "access_token" not in payload["data"]
+    assert "refresh_token" not in payload["data"]
+    assert payload["data"]["csrf_token"]
 
-    claims = jwt.decode(
-        payload["data"]["access_token"],
-        settings.JWT_SECRET_KEY,
-        algorithms=[settings.JWT_ALGORITHM],
-    )
-    assert claims["sub"]
-    assert claims["org_id"] == organization_id
-    assert claims["type"] == "access"
+    cookies = {cookie.name: cookie for cookie in response.cookies.jar}
+    assert settings.ACCESS_TOKEN_COOKIE_NAME in cookies
+    assert settings.REFRESH_TOKEN_COOKIE_NAME in cookies
+    assert settings.CSRF_TOKEN_COOKIE_NAME in cookies
+    assert cookies[settings.ACCESS_TOKEN_COOKIE_NAME].has_nonstandard_attr("HttpOnly")
+    assert cookies[settings.REFRESH_TOKEN_COOKIE_NAME].has_nonstandard_attr("HttpOnly")
+    assert not cookies[settings.CSRF_TOKEN_COOKIE_NAME].has_nonstandard_attr("HttpOnly")
 
 
 @pytest.mark.asyncio
@@ -95,7 +95,6 @@ async def test_employee_login_rejects_unknown_organization(client):
     assert response.json()["error"]["code"] == "INVALID_CREDENTIALS"
 
 
-
 @pytest.mark.asyncio
 async def test_authenticated_employee_endpoint_returns_current_user(
     client,
@@ -112,12 +111,8 @@ async def test_authenticated_employee_endpoint_returns_current_user(
             "password": "StrongPassword123",
         },
     )
-    access_token = login_response.json()["data"]["access_token"]
 
-    response = await client.get(
-        "/auth/me",
-        headers={"Authorization": f"Bearer {access_token}"},
-    )
+    response = await client.get("/auth/me")
 
     assert response.status_code == 200
     payload = response.json()
@@ -127,18 +122,58 @@ async def test_authenticated_employee_endpoint_returns_current_user(
 
 
 @pytest.mark.asyncio
-async def test_authenticated_employee_endpoint_rejects_missing_token(client):
+async def test_authenticated_employee_endpoint_rejects_missing_cookie(client):
     response = await client.get("/auth/me")
-
     assert response.status_code == 401
-    assert response.headers["www-authenticate"] == "Bearer"
 
 
 @pytest.mark.asyncio
-async def test_authenticated_employee_endpoint_rejects_invalid_token(client):
-    response = await client.get(
-        "/auth/me",
-        headers={"Authorization": "Bearer not-a-valid-token"},
-    )
-
+async def test_authenticated_employee_endpoint_rejects_invalid_cookie(client):
+    client.cookies.set(settings.ACCESS_TOKEN_COOKIE_NAME, "not-a-valid-token")
+    response = await client.get("/auth/me")
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_refresh_rotates_refresh_cookie_and_rejects_reuse(
+    client,
+    organization_id,
+    db_connection,
+):
+    await _create_employee(db_connection, organization_id)
+    login = await client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "test-organization",
+            "email": "employee@example.com",
+            "password": "StrongPassword123",
+        },
+    )
+    csrf = login.json()["data"]["csrf_token"]
+    old_refresh = client.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME)
+
+    refreshed = await client.post(
+        "/auth/refresh",
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert refreshed.status_code == 200
+    assert client.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME) != old_refresh
+
+    new_csrf = refreshed.json()["data"]["csrf_token"]
+    client.cookies.set(settings.REFRESH_TOKEN_COOKIE_NAME, old_refresh)
+    reused = await client.post(
+        "/auth/refresh",
+        headers={"X-CSRF-Token": new_csrf},
+    )
+    assert reused.status_code == 401
+
+    revoked_access = await client.get("/auth/me")
+    assert revoked_access.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_mutating_cookie_authenticated_request_requires_csrf(client):
+    # Login cookie setup is exercised by the other tests. This verifies that
+    # refresh cannot be invoked without the double-submit CSRF header.
+    response = await client.post("/auth/refresh")
+    assert response.status_code == 403

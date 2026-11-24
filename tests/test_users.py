@@ -88,6 +88,7 @@ async def test_same_email_allowed_in_different_organizations(
 ):
     second_organization = Organization(
         name="Another Test Organization",
+        slug="another-test-organization",
     )
 
     db_session.add(second_organization)

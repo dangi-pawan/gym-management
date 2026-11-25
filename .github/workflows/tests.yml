@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/complete-auth-rbac
+      - feature/dev-email-invitations
   pull_request:
     branches:
       - main

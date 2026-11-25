@@ -44,7 +44,9 @@ async def invite_employee_endpoint(
 ):
     if organization_id != current_user.organization_id:
         raise HTTPException(status_code=404, detail="Organization not found")
-    if not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL:
+    if settings.APP_ENV == "production" and (
+        not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL
+    ):
         raise HTTPException(status_code=503, detail="Email delivery is not configured")
     current_role = await db.scalar(
         select(OrganizationStaff.role).where(
@@ -202,7 +204,9 @@ async def resend_employee_invitation_endpoint(
 ):
     if organization_id != current_user.organization_id:
         raise HTTPException(status_code=404, detail="Organization not found")
-    if not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL:
+    if settings.APP_ENV == "production" and (
+        not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL
+    ):
         raise HTTPException(status_code=503, detail="Email delivery is not configured")
 
     rate_key = f"employee-invite:{organization_id}:{current_user.id}"

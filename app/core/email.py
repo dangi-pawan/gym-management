@@ -17,7 +17,7 @@ def _send_email_sync(to_email: str, subject: str, body: str) -> None:
     if not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL:
         if settings.APP_ENV in {"development", "test"}:
             logger.warning(
-                "Development email backend: to=%s subject=%s\\n%s",
+                "Development email backend: to=%s subject=%s\n%s",
                 to_email,
                 subject,
                 body,

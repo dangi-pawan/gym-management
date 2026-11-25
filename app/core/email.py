@@ -1,8 +1,12 @@
 import asyncio
+import logging
 import smtplib
 from email.message import EmailMessage
 
 from app.core.config import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class EmailConfigurationError(RuntimeError):
@@ -11,7 +15,17 @@ class EmailConfigurationError(RuntimeError):
 
 def _send_email_sync(to_email: str, subject: str, body: str) -> None:
     if not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL:
-        raise EmailConfigurationError("SMTP_HOST and SMTP_FROM_EMAIL must be configured")
+        if settings.APP_ENV in {"development", "test"}:
+            logger.warning(
+                "Development email backend: to=%s subject=%s\\n%s",
+                to_email,
+                subject,
+                body,
+            )
+            return
+        raise EmailConfigurationError(
+            "SMTP_HOST and SMTP_FROM_EMAIL must be configured"
+        )
 
     message = EmailMessage()
     message["From"] = settings.SMTP_FROM_EMAIL

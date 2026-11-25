@@ -217,6 +217,10 @@ Email delivery:
 - `SMTP_HOST`, `SMTP_PORT`, and `SMTP_FROM_EMAIL`
 - Optional `SMTP_USERNAME` and `SMTP_PASSWORD`
 - `SMTP_STARTTLS=true` for STARTTLS, or `SMTP_USE_SSL=true` for implicit TLS
+- In `APP_ENV=development` or `APP_ENV=test`, if SMTP host/from address are
+  missing, the development email backend writes the recipient, subject, and
+  email body (including one-time tokens) to the application log. Use this only
+  with local/test data; never enable this behavior in production.
 
 The application intentionally refuses production startup configuration when
 secure cookies are disabled or CORS origins are empty. Use exact frontend
@@ -233,9 +237,11 @@ ENV_FILE=.env.test uvicorn app.main:app --reload
 
 Open `http://127.0.0.1:8000/docs` using the same host and port as the API.
 
-1. Configure a local SMTP sink or test SMTP account in `.env.test`.
-2. Call `POST /auth/register`; retrieve the verification token from the test
-   email inbox.
+1. Either configure a local SMTP sink/test SMTP account in `.env.test`, or
+   leave SMTP host/from address unset and use the development email backend.
+2. Call `POST /auth/register`; with the development backend, retrieve the
+   verification token from the FastAPI terminal log; with SMTP, retrieve it
+   from the test email inbox.
 3. Call `POST /auth/verify-email`; the browser receives auth cookies.
 4. Copy `data.csrf_token` into the `X-CSRF-Token` header for write operations.
 5. Create a gym, invite an employee, retrieve the invitation token from email,

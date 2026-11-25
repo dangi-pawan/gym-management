@@ -11,6 +11,7 @@ from app.features.organizations.schemas import (
     OrganizationUpdate,
 )
 from app.features.gyms.models import Gym
+from app.features.users.models import User
 
 
 def _slugify(value: str) -> str:
@@ -149,6 +150,12 @@ async def delete_organization(
     )
     if gym_exists:
         return "has_gyms"
+
+    user_exists = await db.scalar(
+        select(exists().where(User.organization_id == organization_id))
+    )
+    if user_exists:
+        return "has_users"
 
     await db.delete(organization)
     await db.commit()

@@ -1,113 +1,109 @@
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.features.gyms.models import Gym
 from app.features.gyms.schemas import GymCreate, GymUpdate
-
-from sqlalchemy import select, func, exists
-
 from app.features.members.models import Member
+from app.features.users.gym_staff import GymStaff
+from app.features.users.organization_staff import OrganizationStaff
 
 
 async def create_gym(
     db: AsyncSession,
-    gym_data: GymCreate
+    gym_data: GymCreate,
+    organization_id: int,
 ) -> Gym:
     new_gym = Gym(
         name=gym_data.name,
-        organization_id=gym_data.organization_id,
+        organization_id=organization_id,
     )
-
     db.add(new_gym)
     await db.commit()
     await db.refresh(new_gym)
-
     return new_gym
 
 
 async def get_all_gyms(
     db: AsyncSession,
     page: int,
-    limit: int
+    limit: int,
+    organization_id: int,
+    user_id: int,
 ):
     offset = (page - 1) * limit
-
-    query = (
-        select(Gym)
-        .order_by(Gym.id)
-        .offset(offset)
-        .limit(limit)
+    org_role_result = await db.execute(
+        select(OrganizationStaff.role).where(
+            OrganizationStaff.user_id == user_id,
+            OrganizationStaff.organization_id == organization_id,
+            OrganizationStaff.is_active.is_(True),
+        )
     )
+    organization_role = org_role_result.scalar_one_or_none()
 
-    result = await db.execute(query)
+    if organization_role in {"owner", "admin"}:
+        base_query = select(Gym).where(Gym.organization_id == organization_id)
+        count_query = select(func.count()).select_from(Gym).where(
+            Gym.organization_id == organization_id
+        )
+    else:
+        base_query = (
+            select(Gym)
+            .join(GymStaff, GymStaff.gym_id == Gym.id)
+            .where(
+                Gym.organization_id == organization_id,
+                GymStaff.organization_id == organization_id,
+                GymStaff.user_id == user_id,
+                GymStaff.is_active.is_(True),
+            )
+        )
+        count_query = (
+            select(func.count())
+            .select_from(Gym)
+            .join(GymStaff, GymStaff.gym_id == Gym.id)
+            .where(
+                Gym.organization_id == organization_id,
+                GymStaff.organization_id == organization_id,
+                GymStaff.user_id == user_id,
+                GymStaff.is_active.is_(True),
+            )
+        )
+
+    result = await db.execute(
+        base_query.order_by(Gym.id).offset(offset).limit(limit)
+    )
     gyms = result.scalars().all()
-
-    count_query = select(func.count()).select_from(Gym)
-    count_result = await db.execute(count_query)
-    total = count_result.scalar_one()
-
+    total = await db.scalar(count_query)
     return gyms, total
 
 
+async def get_gym_by_id(db: AsyncSession, gym_id: int):
+    result = await db.execute(select(Gym).where(Gym.id == gym_id))
+    return result.scalar_one_or_none()
 
 
-
-async def get_gym_by_id(
-    db: AsyncSession,
-    gym_id: int
-):
-    query = select(Gym).where(Gym.id == gym_id)
-
-    result = await db.execute(query)
-
+async def update_gym(db: AsyncSession, gym_id: int, gym_data: GymUpdate):
+    result = await db.execute(select(Gym).where(Gym.id == gym_id))
     gym = result.scalar_one_or_none()
-
-    return gym
-
-
-
-
-async def update_gym(
-    db: AsyncSession,
-    gym_id: int,
-    gym_data: GymUpdate
-):
-    query = select(Gym).where(Gym.id == gym_id)
-    result = await db.execute(query)
-    gym = result.scalar_one_or_none()
-
     if gym is None:
         return None
-
     gym.name = gym_data.name
-
     await db.commit()
     await db.refresh(gym)
-
     return gym
 
 
-
-async def delete_gym(
-    db: AsyncSession,
-    gym_id: int
-):
-    query = select(Gym).where(Gym.id == gym_id)
-    result = await db.execute(query)
+async def delete_gym(db: AsyncSession, gym_id: int):
+    result = await db.execute(select(Gym).where(Gym.id == gym_id))
     gym = result.scalar_one_or_none()
-
     if gym is None:
         return "not_found"
 
-    member_exists_query = select(
-        exists().where(Member.gym_id == gym_id)
+    member_exists = await db.scalar(
+        select(exists().where(Member.gym_id == gym_id))
     )
-
-    member_exists = await db.scalar(member_exists_query)
-
     if member_exists:
         return "has_members"
 
     await db.delete(gym)
     await db.commit()
-
     return "deleted"

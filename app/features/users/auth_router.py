@@ -1,31 +1,417 @@
-from fastapi import APIRouter, Depends
+import logging
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.responses.helpers import success_response
 from app.common.responses.schemas import APIResponse
+from app.core.config import settings
+from app.core.email import send_email
+from app.core.security import create_csrf_token, hash_password, verify_password
 from app.db.session import get_db
-from app.features.users.auth_schemas import LoginRequest, TokenResponse
-from app.features.users.auth_service import authenticate_employee
+from app.features.users.auth_schemas import (
+    LoginRequest,
+    LoginResponse,
+    RefreshResponse,
+    RegisterOrganizationRequest,
+    PasswordChangeRequest,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
+    RegisterResponse,
+    EmailVerificationRequest,
+    EmployeeInvitationAcceptRequest,
+    AuthenticatedUserResponse,
+    GymRoleInfo,
+)
+from app.features.users.auth_service import (
+    authenticate_employee,
+    create_email_verification_token,
+    verify_email_and_issue_session,
+    accept_employee_invitation,
+    create_password_reset_token,
+    increment_auth_rate_limit,
+    register_organization_owner,
+    reset_password_with_token,
+    revoke_refresh_session,
+    revoke_user_sessions,
+    rotate_refresh_token,
+    AuthenticationRateLimitException,
+)
+from app.features.users.dependencies import get_current_user, require_csrf
+from app.features.users.models import User
+from app.features.users.gym_staff import GymStaff
+from app.features.users.organization_staff import OrganizationStaff
+from app.features.users.schemas import UserResponse
+from app.features.organizations.service import get_organization_by_slug
+from app.features.users.service import get_user_by_email
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-@router.post("/login", response_model=APIResponse[TokenResponse])
-async def login(
-    credentials: LoginRequest,
+def _set_auth_cookies(
+    response: Response,
+    access_token: str,
+    refresh_token: str,
+    csrf_token: str,
+) -> None:
+    common = {
+        "secure": settings.COOKIE_SECURE,
+        "samesite": settings.COOKIE_SAMESITE,
+        "domain": settings.COOKIE_DOMAIN,
+    }
+    response.set_cookie(
+        key=settings.ACCESS_TOKEN_COOKIE_NAME,
+        value=access_token,
+        httponly=True,
+        path="/",
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        **common,
+    )
+    response.set_cookie(
+        key=settings.REFRESH_TOKEN_COOKIE_NAME,
+        value=refresh_token,
+        httponly=True,
+        path="/auth",
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+        **common,
+    )
+    response.set_cookie(
+        key=settings.CSRF_TOKEN_COOKIE_NAME,
+        value=csrf_token,
+        httponly=False,
+        path="/",
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+        **common,
+    )
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    common = {
+        "secure": settings.COOKIE_SECURE,
+        "samesite": settings.COOKIE_SAMESITE,
+        "domain": settings.COOKIE_DOMAIN,
+    }
+    response.delete_cookie(settings.ACCESS_TOKEN_COOKIE_NAME, path="/", **common)
+    response.delete_cookie(settings.REFRESH_TOKEN_COOKIE_NAME, path="/auth", **common)
+    response.delete_cookie(settings.CSRF_TOKEN_COOKIE_NAME, path="/", **common)
+
+
+def _login_response(
+    response: Response,
+    access_token: str,
+    refresh_token: str,
+    expires_at,
+):
+    csrf_token = create_csrf_token()
+    _set_auth_cookies(response, access_token, refresh_token, csrf_token)
+    return success_response(
+        message="Authentication successful",
+        data=LoginResponse(
+            csrf_token=csrf_token,
+            access_expires_at=expires_at,
+        ),
+    )
+
+
+@router.post("/register", response_model=APIResponse[RegisterResponse], status_code=202)
+async def register_organization(
+    registration: RegisterOrganizationRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    access_token, expires_at = await authenticate_employee(
+    if settings.APP_ENV == "production" and (
+        not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL
+    ):
+        raise HTTPException(status_code=503, detail="Email delivery is not configured")
+    rate_key = f"register:{request.client.host if request.client else 'unknown'}"
+    if await increment_auth_rate_limit(
+        db, key=rate_key, max_attempts=3, window_minutes=60
+    ):
+        raise AuthenticationRateLimitException()
+    user = await register_organization_owner(
+        db,
+        organization_name=registration.organization_name,
+        full_name=registration.full_name,
+        email=str(registration.email),
+        password=registration.password,
+    )
+    raw_token = await create_email_verification_token(db, user.id)
+    await send_email(
+        str(user.email),
+        "Verify your Gym Management account",
+        (
+            "Verify your email by submitting this one-time token to "
+            "POST /auth/verify-email. The token expires in 24 hours.\n\n"
+            f"Verification token: {raw_token}"
+        ),
+    )
+    return success_response(
+        message="Registration successful. Check your email to verify your account.",
+        data=RegisterResponse(email_verification_required=True),
+    )
+
+
+@router.post("/verify-email", response_model=APIResponse[LoginResponse])
+async def verify_email(
+    verification: EmailVerificationRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    _user, access_token, refresh_token, expires_at = await verify_email_and_issue_session(
+        db, verification.token
+    )
+    return _login_response(response, access_token, refresh_token, expires_at)
+
+
+@router.post("/accept-invitation", response_model=APIResponse[None])
+async def accept_invitation(
+    invitation: EmployeeInvitationAcceptRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    await accept_employee_invitation(
+        db,
+        raw_token=invitation.token,
+        password=invitation.password,
+    )
+    return success_response(message="Invitation accepted. You can now sign in.")
+
+
+@router.post("/login", response_model=APIResponse[LoginResponse])
+async def login(
+    credentials: LoginRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    _user, access_token, refresh_token, expires_at = await authenticate_employee(
         db,
         organization_slug=credentials.organization_slug,
         email=str(credentials.email),
         password=credentials.password,
+        client_ip=request.client.host if request.client else "unknown",
+    )
+    return _login_response(response, access_token, refresh_token, expires_at)
+
+
+@router.post("/resend-verification", response_model=APIResponse[None])
+async def resend_verification(
+    request_data: ForgotPasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    rate_key = (
+        f"verify-resend:{request.client.host if request.client else 'unknown'}:"
+        f"{request_data.organization_slug}:{request_data.email}"
+    )
+    blocked = await increment_auth_rate_limit(
+        db, key=rate_key, max_attempts=3, window_minutes=60
+    )
+    ip_blocked = await increment_auth_rate_limit(
+        db,
+        key=f"verify-resend-ip:{request.client.host if request.client else 'unknown'}",
+        max_attempts=20,
+        window_minutes=60,
+    )
+    if not blocked and not ip_blocked and settings.SMTP_HOST and settings.SMTP_FROM_EMAIL:
+        organization = await get_organization_by_slug(db, request_data.organization_slug)
+        if organization is not None:
+            user = await get_user_by_email(db, organization.id, str(request_data.email))
+            if user is not None and user.is_active and user.email_verified_at is None:
+                raw_token = await create_email_verification_token(db, user.id)
+                await send_email(
+                    str(user.email),
+                    "Verify your Gym Management account",
+                    f"Verification token: {raw_token}\nExpires in 24 hours.",
+                )
+    return success_response(
+        message="If verification is pending, instructions have been sent."
+    )
+
+
+@router.post(
+    "/refresh",
+    response_model=APIResponse[RefreshResponse],
+    dependencies=[Depends(require_csrf)],
+)
+async def refresh(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        access_token, refresh_token, expires_at = await rotate_refresh_token(
+            db,
+            request.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME),
+        )
+    except Exception:
+        _clear_auth_cookies(response)
+        raise
+    csrf_token = create_csrf_token()
+    _set_auth_cookies(response, access_token, refresh_token, csrf_token)
+    return success_response(
+        message="Session refreshed successfully",
+        data=RefreshResponse(
+            csrf_token=csrf_token,
+            access_expires_at=expires_at,
+        ),
+    )
+
+
+@router.post(
+    "/logout",
+    response_model=APIResponse[None],
+    dependencies=[Depends(require_csrf)],
+)
+async def logout(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    await revoke_refresh_session(
+        db,
+        request.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME),
+    )
+    _clear_auth_cookies(response)
+    return success_response(message="Logged out successfully")
+
+
+
+
+
+@router.post("/forgot-password", response_model=APIResponse[None])
+async def forgot_password(
+    request_data: ForgotPasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    rate_key = (
+        f"password-reset:{request.client.host if request.client else 'unknown'}:"
+        f"{request_data.organization_slug}:{request_data.email}"
+    )
+    identity_blocked = await increment_auth_rate_limit(
+        db,
+        key=rate_key,
+        max_attempts=settings.PASSWORD_RESET_MAX_REQUESTS,
+        window_minutes=settings.PASSWORD_RESET_RATE_LIMIT_MINUTES,
+    )
+    ip_blocked = await increment_auth_rate_limit(
+        db,
+        key=f"password-reset-ip:{request.client.host if request.client else 'unknown'}",
+        max_attempts=settings.PASSWORD_RESET_IP_MAX_REQUESTS,
+        window_minutes=settings.PASSWORD_RESET_RATE_LIMIT_MINUTES,
+    )
+    if identity_blocked or ip_blocked:
+        return success_response(
+            message="If the account exists, password reset instructions have been sent."
+        )
+    if not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL:
+        raise HTTPException(status_code=503, detail="Email delivery is not configured")
+
+    organization = await get_organization_by_slug(
+        db, request_data.organization_slug
+    )
+    if organization is not None:
+        user = await get_user_by_email(
+            db, organization.id, str(request_data.email)
+        )
+        if user is not None and user.is_active:
+            raw_token = await create_password_reset_token(db, user.id)
+            try:
+                await send_email(
+                    str(user.email),
+                    "Gym Management password reset",
+                    (
+                        "A password reset was requested for your account.\n\n"
+                        f"One-time reset token: {raw_token}\n\n"
+                        "Submit this token to POST /auth/reset-password in the API "
+                        "documentation. It expires in 30 minutes. If you did not "
+                        "request this, ignore this email."
+                    ),
+                )
+            except Exception:
+                logger.exception("Password reset email delivery failed")
+
+    return success_response(
+        message="If the account exists, password reset instructions have been sent."
+    )
+
+
+@router.post("/reset-password", response_model=APIResponse[None])
+async def reset_password(
+    reset_data: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    await reset_password_with_token(
+        db,
+        raw_token=reset_data.token,
+        new_password=reset_data.new_password,
     )
     return success_response(
-        message="Login successful",
-        data=TokenResponse(
-            access_token=access_token,
-            expires_at=expires_at,
+        message="Password reset successfully. Please sign in again."
+    )
+
+@router.post("/change-password", response_model=APIResponse[None])
+async def change_password(
+    password_data: PasswordChangeRequest,
+    response: Response,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+):
+    if not verify_password(password_data.current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=400,
+            detail="Current password is incorrect",
+        )
+    current_user.password_hash = hash_password(password_data.new_password)
+    await revoke_user_sessions(db, current_user.id)
+    _clear_auth_cookies(response)
+    return success_response(
+        message="Password changed. Please sign in again.",
+    )
+
+@router.post("/logout-all", response_model=APIResponse[None])
+async def logout_all_sessions(
+    response: Response,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+):
+    await revoke_user_sessions(db, current_user.id)
+    _clear_auth_cookies(response)
+    return success_response(message="All sessions have been revoked")
+
+
+@router.get("/me", response_model=APIResponse[AuthenticatedUserResponse])
+async def get_authenticated_employee(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+):
+    organization_role_result = await db.execute(
+        select(OrganizationStaff.role).where(
+            OrganizationStaff.user_id == current_user.id,
+            OrganizationStaff.organization_id == current_user.organization_id,
+            OrganizationStaff.is_active.is_(True),
+        )
+    )
+    gym_roles_result = await db.execute(
+        select(GymStaff.gym_id, GymStaff.role).where(
+            GymStaff.user_id == current_user.id,
+            GymStaff.organization_id == current_user.organization_id,
+            GymStaff.is_active.is_(True),
+        ).order_by(GymStaff.gym_id)
+    )
+    return success_response(
+        message="Authenticated employee fetched successfully",
+        data=AuthenticatedUserResponse(
+            **UserResponse.model_validate(current_user).model_dump(),
+            organization_role=organization_role_result.scalar_one_or_none(),
+            gym_roles=[
+                GymRoleInfo(gym_id=gym_id, role=role)
+                for gym_id, role in gym_roles_result.all()
+            ],
         ),
     )

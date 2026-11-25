@@ -5,7 +5,6 @@ from app.common.responses.schemas import APIResponse
 
 class GymCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    organization_id: int = Field(gt=0)
 
 
 class GymUpdate(BaseModel):

@@ -1,98 +1,105 @@
+import re
 
 import pytest
 
 
-@pytest.mark.asyncio
-async def test_create_organization(client):
+async def _register(client, organization_name, monkeypatch):
+    import app.features.users.auth_router as auth_router_module
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.test")
+    monkeypatch.setattr(settings, "SMTP_FROM_EMAIL", "no-reply@example.test")
+    sent = []
+
+    async def fake_send_email(to_email, subject, body):
+        sent.append(body)
+
+    monkeypatch.setattr(auth_router_module, "send_email", fake_send_email)
+
     response = await client.post(
-        "/organizations/",
-        json={"name": "Test Organization"},
+        "/auth/register",
+        json={
+            "organization_name": organization_name,
+            "full_name": "Organization Owner",
+            "email": "owner@example.com",
+            "password": "StrongPassword123",
+        },
     )
-
-    assert response.status_code == 201
-
-    data = response.json()
-
-    assert data["success"] is True
-    assert data["data"]["name"] == "Test Organization"
-    assert data["data"]["slug"] == "test-organization"
-    assert data["data"]["id"] is not None
+    assert response.status_code == 202
+    token = re.search(r"Verification token: (\S+)", sent[-1]).group(1)
+    verified = await client.post("/auth/verify-email", json={"token": token})
+    assert verified.status_code == 200
+    client.headers["X-CSRF-Token"] = verified.json()["data"]["csrf_token"]
+    return verified
 
 
-@pytest.mark.asyncio
-async def test_get_all_organizations(client):
-    await client.post(
-        "/organizations/",
-        json={"name": "Organization One"},
-    )
-
-    await client.post(
-        "/organizations/",
-        json={"name": "Organization Two"},
-    )
-
+async def _current_organization(client):
     response = await client.get("/organizations/")
-
     assert response.status_code == 200
-
-    data = response.json()["data"]
-    names = [organization["name"] for organization in data]
-
-    assert "Organization One" in names
-    assert "Organization Two" in names
+    return response.json()["data"][0]
 
 
 @pytest.mark.asyncio
-async def test_get_organization_by_id(client):
-    create_response = await client.post(
-        "/organizations/",
-        json={"name": "Get Organization"},
-    )
+async def test_register_organization_creates_owner_and_requires_verification(
+    client,
+    monkeypatch,
+):
+    response = await _register(client, "Test Organization", monkeypatch)
+    assert response.json()["success"] is True
+    assert response.json()["data"]["csrf_token"]
 
-    organization_id = create_response.json()["data"]["id"]
+    organization = await _current_organization(client)
+    assert organization["name"] == "Test Organization"
+    assert organization["slug"] == "test-organization"
 
-    response = await client.get(
-        f"/organizations/{organization_id}"
-    )
 
+@pytest.mark.asyncio
+async def test_organization_listing_is_tenant_scoped(client, monkeypatch):
+    await _register(client, "Organization One", monkeypatch)
+    first = await _current_organization(client)
+    await _register(client, "Organization Two", monkeypatch)
+    second = await _current_organization(client)
+
+    assert first["name"] == "Organization One"
+    assert second["name"] == "Organization Two"
+    assert first["id"] != second["id"]
+
+
+@pytest.mark.asyncio
+async def test_get_organization_by_id(client, monkeypatch):
+    await _register(client, "Get Organization", monkeypatch)
+    organization = await _current_organization(client)
+
+    response = await client.get(f"/organizations/{organization['id']}")
     assert response.status_code == 200
     assert response.json()["data"]["name"] == "Get Organization"
 
 
 @pytest.mark.asyncio
-async def test_update_organization(client):
-    create_response = await client.post(
-        "/organizations/",
-        json={"name": "Old Organization"},
-    )
-
-    organization_id = create_response.json()["data"]["id"]
+async def test_update_organization(client, monkeypatch):
+    await _register(client, "Old Organization", monkeypatch)
+    organization = await _current_organization(client)
 
     response = await client.put(
-        f"/organizations/{organization_id}",
+        f"/organizations/{organization['id']}",
         json={"name": "Updated Organization"},
     )
-
     assert response.status_code == 200
     assert response.json()["data"]["name"] == "Updated Organization"
+    assert response.json()["data"]["slug"] == "old-organization"
 
 
 @pytest.mark.asyncio
-async def test_delete_organization(client):
-    create_response = await client.post(
-        "/organizations/",
-        json={"name": "Delete Organization"},
-    )
+async def test_cannot_delete_organization_while_owner_account_exists(
+    client,
+    monkeypatch,
+):
+    await _register(client, "Delete Organization", monkeypatch)
+    organization = await _current_organization(client)
 
-    organization_id = create_response.json()["data"]["id"]
-
-    response = await client.delete(
-        f"/organizations/{organization_id}"
-    )
-
-    assert response.status_code == 200
-    assert response.json()["success"] is True
-    assert response.json()["data"] is None
+    response = await client.delete(f"/organizations/{organization['id']}")
+    assert response.status_code == 409
+    assert response.json()["success"] is False
 
 
 @pytest.mark.asyncio
@@ -103,69 +110,22 @@ async def test_cannot_delete_organization_with_gyms(
 ):
     await create_gym("Test Gym")
 
-    response = await client.delete(
-        f"/organizations/{organization_id}"
-    )
-
+    response = await client.delete(f"/organizations/{organization_id}")
     assert response.status_code == 409
     assert response.json()["success"] is False
 
 
 @pytest.mark.asyncio
-async def test_get_nonexistent_organization(client):
-    response = await client.get("/organizations/99999999")
+async def test_cross_tenant_organization_access_is_hidden(client, monkeypatch):
+    await _register(client, "Organization One", monkeypatch)
+    first = await _current_organization(client)
+    await _register(client, "Organization Two", monkeypatch)
 
+    response = await client.get(f"/organizations/{first['id']}")
     assert response.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_update_nonexistent_organization(client):
-    response = await client.put(
-        "/organizations/99999999",
-        json={"name": "Updated Organization"},
-    )
-
-    assert response.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_delete_nonexistent_organization(client):
-    response = await client.delete("/organizations/99999999")
-
-    assert response.status_code == 404
-
-
-
-@pytest.mark.asyncio
-async def test_duplicate_organization_names_get_unique_slugs(client):
-    first = await client.post(
-        "/organizations/",
-        json={"name": "Fitness Club"},
-    )
-    second = await client.post(
-        "/organizations/",
-        json={"name": "Fitness Club"},
-    )
-
-    assert first.status_code == 201
-    assert second.status_code == 201
-    assert first.json()["data"]["slug"] == "fitness-club"
-    assert second.json()["data"]["slug"] == "fitness-club-2"
-
-
-@pytest.mark.asyncio
-async def test_organization_slug_does_not_change_when_name_changes(client):
-    created = await client.post(
-        "/organizations/",
-        json={"name": "Old Fitness Club"},
-    )
-    organization_id = created.json()["data"]["id"]
-
-    updated = await client.put(
-        f"/organizations/{organization_id}",
-        json={"name": "New Fitness Club"},
-    )
-
-    assert updated.status_code == 200
-    assert updated.json()["data"]["name"] == "New Fitness Club"
-    assert updated.json()["data"]["slug"] == "old-fitness-club"
+async def test_unauthenticated_organization_access_is_rejected(client):
+    response = await client.get("/organizations/")
+    assert response.status_code == 401

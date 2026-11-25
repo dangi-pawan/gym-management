@@ -1,4 +1,6 @@
 
+from datetime import datetime, timezone
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +45,7 @@ async def create_user(
         full_name=user_data.full_name,
         email=str(user_data.email),
         password_hash=hash_password(user_data.password),
+        email_verified_at=datetime.now(timezone.utc),
     )
 
     db.add(new_user)

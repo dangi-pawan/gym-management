@@ -1,3 +1,6 @@
+import re
+from datetime import datetime, timezone
+
 import pytest_asyncio
 
 from httpx import ASGITransport, AsyncClient
@@ -8,10 +11,13 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
+from app.core.security import hash_password
 from app.db.session import get_db
 from app.main import app
 
 from app.features.organizations.models import Organization
+from app.features.users.models import User
+from app.features.users.organization_staff import OrganizationStaff
 
 
 @pytest_asyncio.fixture
@@ -23,7 +29,6 @@ async def db_connection():
 
     async with test_engine.connect() as connection:
         transaction = await connection.begin()
-
         try:
             yield connection
         finally:
@@ -47,25 +52,29 @@ async def organization_id(db_connection):
             name="Test Organization",
             slug="test-organization",
         )
-
         session.add(organization)
-        await session.commit()
+        await session.flush()
 
-        return organization.id
-
-
-@pytest_asyncio.fixture
-async def create_gym(client, organization_id):
-    async def _create(name):
-        return await client.post(
-            "/gyms/",
-            json={
-                "name": name,
-                "organization_id": organization_id,
-            },
+        owner = User(
+            organization_id=organization.id,
+            full_name="Test Owner",
+            email="owner@example.com",
+            password_hash=hash_password("OwnerPassword123"),
+            email_verified_at=datetime.now(timezone.utc),
         )
+        session.add(owner)
+        await session.flush()
 
-    return _create
+        session.add(
+            OrganizationStaff(
+                user_id=owner.id,
+                organization_id=organization.id,
+                role="owner",
+                is_active=True,
+            )
+        )
+        await session.commit()
+        return organization.id
 
 
 @pytest_asyncio.fixture
@@ -83,18 +92,76 @@ async def client(db_connection):
 
     previous_override = app.dependency_overrides.get(get_db)
     app.dependency_overrides[get_db] = override_get_db
-
     try:
         transport = ASGITransport(app=app)
-
         async with AsyncClient(
             transport=transport,
             base_url="http://test",
         ) as test_client:
             yield test_client
-
     finally:
         if previous_override is not None:
             app.dependency_overrides[get_db] = previous_override
         else:
             app.dependency_overrides.pop(get_db, None)
+
+
+@pytest_asyncio.fixture
+async def create_gym(client, organization_id):
+    login = await client.post(
+        "/auth/login",
+        json={
+            "organization_slug": "test-organization",
+            "email": "owner@example.com",
+            "password": "OwnerPassword123",
+        },
+    )
+    assert login.status_code == 200
+    client.headers["X-CSRF-Token"] = login.json()["data"]["csrf_token"]
+
+    async def _create(name):
+        return await client.post(
+            "/gyms/",
+            json={"name": name, "organization_id": organization_id},
+        )
+
+    return _create
+
+
+@pytest_asyncio.fixture
+async def invite_employee(client, organization_id, monkeypatch):
+    import app.features.users.router as employee_router_module
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.test")
+    monkeypatch.setattr(settings, "SMTP_FROM_EMAIL", "no-reply@example.test")
+    sent_messages = []
+
+    async def fake_send_email(to_email, subject, body):
+        sent_messages.append((to_email, subject, body))
+
+    monkeypatch.setattr(employee_router_module, "send_email", fake_send_email)
+
+    async def _invite(
+        full_name: str,
+        email: str,
+        organization_role: str | None = None,
+    ):
+        payload = {"full_name": full_name, "email": email}
+        if organization_role is not None:
+            payload["organization_role"] = organization_role
+        response = await client.post(
+            f"/organizations/{organization_id}/employees/invitations",
+            json=payload,
+        )
+        if response.status_code != 202:
+            return response, None
+        token_match = re.search(r"Invitation token: (\S+)", sent_messages[-1][2])
+        assert token_match is not None
+        accepted = await client.post(
+            "/auth/accept-invitation",
+            json={"token": token_match.group(1), "password": "StrongPassword123"},
+        )
+        return response, accepted
+
+    return _invite

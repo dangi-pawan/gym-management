@@ -40,7 +40,7 @@ async def test_get_gym_by_id(client, create_gym):
 
 
 @pytest.mark.asyncio
-async def test_get_nonexistent_gym(client):
+async def test_get_nonexistent_gym(client, create_gym):
     response = await client.get("/gyms/9999")
     assert response.status_code == 404
 

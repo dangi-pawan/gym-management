@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import app.db.models
 
 from app.db.session import engine, get_db
+from app.core.config import settings
 from app.features.members.router import router as members_router
 from app.features.gyms.router import router as gyms_router
 
@@ -21,6 +23,8 @@ from app.common.exceptions.handlers import (
 
 from app.features.organizations.router import router as organizations_router
 from app.features.users.auth_router import router as auth_router
+from app.features.users.router import router as users_router
+from app.features.users.staff_router import router as gym_staff_router
 
 
 @asynccontextmanager
@@ -43,6 +47,14 @@ app = FastAPI(
     description="Multi-tenant Gym Management Platform",
     version="1.0.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
 
@@ -72,3 +84,5 @@ app.include_router(organizations_router)
 app.include_router(gyms_router)
 app.include_router(members_router)
 app.include_router(auth_router)
+app.include_router(users_router)
+app.include_router(gym_staff_router)

@@ -124,6 +124,10 @@ async def register_organization(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
+    if settings.APP_ENV == "production" and (
+        not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL
+    ):
+        raise HTTPException(status_code=503, detail="Email delivery is not configured")
     rate_key = f"register:{request.client.host if request.client else 'unknown'}"
     if await increment_auth_rate_limit(
         db, key=rate_key, max_attempts=3, window_minutes=60

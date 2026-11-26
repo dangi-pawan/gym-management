@@ -488,7 +488,7 @@ Refund:
 ### Explicitly unsupported / production gates
 
 - **Person-to-person membership transfer is prohibited.** The API schema rejects transfer_allowed=true; gym access assignments remain a separate operation.
-- **Automatic recurring renewal is not yet enabled.** The plan may express an auto-renew policy, but recurring Razorpay mandate creation, customer authorization, recurring charge webhooks, per-cycle invoices, retries and mandate cancellation are not implemented. Do not enable or advertise automatic charging until this workflow is built and tested with explicit member mandate consent.
+- **Automatic recurring renewal is not yet enabled.** Auto-renew is deliberately disabled: the API rejects auto_renew_allowed=true and the database enforces false. Recurring Razorpay mandate creation, customer authorization, recurring charge webhooks, per-cycle invoices, retries and mandate cancellation are not implemented. Do not enable or advertise automatic charging until this workflow is built and tested with explicit member mandate consent.
 - Razorpay and S3 credentials, a webhook endpoint reachable by Razorpay, bucket private-access policy, encryption, backups, retention and monitoring must be configured in the deployment environment. Never commit credentials.
 - Razorpay refunds are provider-driven and may remain pending at Razorpay after the API accepts a request; production reconciliation should consume refund webhooks and reconcile provider settlement reports.
 - The tax implementation provides configurable arithmetic and snapshots; it is not tax/legal advice and does not determine the correct GST rate, SAC code, place of supply or registration obligations.

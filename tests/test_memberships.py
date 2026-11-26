@@ -113,6 +113,12 @@ async def test_membership_plan_subscription_payment_invoice_and_private_document
     assert payment_response.json()["data"]["status"] == "succeeded"
     assert payment_response.json()["data"]["amount"] == "900.00"
 
+    duplicate_payment = await client.post(
+        f"/gyms/{gym_id}/subscriptions/{subscription_id}/payments/manual",
+        json={"payment_method": "upi", "provider_reference": "TEST-UPI-001"},
+    )
+    assert duplicate_payment.status_code == 409
+
     subscription_detail = await client.get(
         f"/gyms/{gym_id}/subscriptions/{subscription_id}"
     )

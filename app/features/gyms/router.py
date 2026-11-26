@@ -103,6 +103,11 @@ async def delete_gym_endpoint(
     if result == "has_members":
         raise HTTPException(
             status_code=409,
-            detail="Cannot delete gym because it has members",
+            detail="Cannot delete gym because it has active member assignments",
+        )
+    if result == "has_memberships":
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete gym because membership plans or subscription history reference it",
         )
     return success_response(message="Gym deleted successfully")

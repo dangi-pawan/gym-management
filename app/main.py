@@ -11,6 +11,7 @@ import app.db.models
 from app.db.session import engine, get_db
 from app.core.config import settings
 from app.features.members.router import router as members_router
+from app.features.memberships.router import router as memberships_router
 from app.features.gyms.router import router as gyms_router
 
 from app.common.exceptions.base import AppException
@@ -83,6 +84,7 @@ async def database_health(
 app.include_router(organizations_router)
 app.include_router(gyms_router)
 app.include_router(members_router)
+app.include_router(memberships_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(gym_staff_router)

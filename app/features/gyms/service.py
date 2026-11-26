@@ -1,9 +1,16 @@
-from sqlalchemy import exists, func, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.features.gyms.models import Gym
 from app.features.gyms.schemas import GymCreate, GymUpdate
 from app.features.members.models import Member
+from app.features.memberships.models import (
+    GymMembershipPlan,
+    MemberGymAssignment,
+    MemberSubscription,
+    MembershipPlanAccessGym,
+    SubscriptionAccessGym,
+)
 from app.features.users.gym_staff import GymStaff
 from app.features.users.organization_staff import OrganizationStaff
 
@@ -16,6 +23,7 @@ async def create_gym(
     new_gym = Gym(
         name=gym_data.name,
         organization_id=organization_id,
+        timezone=gym_data.timezone,
     )
     db.add(new_gym)
     await db.commit()
@@ -87,6 +95,8 @@ async def update_gym(db: AsyncSession, gym_id: int, gym_data: GymUpdate):
     if gym is None:
         return None
     gym.name = gym_data.name
+    if gym_data.timezone is not None:
+        gym.timezone = gym_data.timezone
     await db.commit()
     await db.refresh(gym)
     return gym
@@ -99,10 +109,31 @@ async def delete_gym(db: AsyncSession, gym_id: int):
         return "not_found"
 
     member_exists = await db.scalar(
+        select(
+            exists().where(
+                MemberGymAssignment.gym_id == gym_id,
+                MemberGymAssignment.status == "active",
+            )
+        )
+    )
+    legacy_member_exists = await db.scalar(
         select(exists().where(Member.gym_id == gym_id))
     )
-    if member_exists:
+    if member_exists or legacy_member_exists:
         return "has_members"
+
+    membership_history_exists = await db.scalar(
+        select(
+            or_(
+                exists().where(GymMembershipPlan.gym_id == gym_id),
+                exists().where(MembershipPlanAccessGym.gym_id == gym_id),
+                exists().where(MemberSubscription.purchased_at_gym_id == gym_id),
+                exists().where(SubscriptionAccessGym.gym_id == gym_id),
+            )
+        )
+    )
+    if membership_history_exists:
+        return "has_memberships"
 
     await db.delete(gym)
     await db.commit()

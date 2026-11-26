@@ -46,3 +46,7 @@ Always run the test suite against the test database:
 ```
 ENV_FILE=.env.test pytest -q
 ```
+
+## Membership Management
+
+The membership domain, organization/gym ownership rules, database design, lifecycle, API direction, migration strategy, and implementation checklist are documented in [Membership Management documentation](docs/MEMBERSHIP_MANAGEMENT.md). This feature is being implemented incrementally on `feature/membership-management`.

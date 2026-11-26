@@ -26,7 +26,7 @@ from app.features.memberships.models import (
     SubscriptionFreeze,
 )
 from app.features.memberships.documents import create_private_pdf_document, delete_private_document
-from app.features.memberships.advanced_service import calculate_tax
+from app.features.memberships.advanced_service import calculate_tax, calculate_tax_snapshot
 from app.features.memberships.schemas import (
     GymMembershipPlanUpdate,
     ManualPaymentCreate,
@@ -633,6 +633,9 @@ async def create_subscription(
         currency_snapshot=plan.currency,
         access_type_snapshot=plan.access_type,
         rules_snapshot=rules_snapshot,
+        gst_rate_snapshot=tax["gst_rate"],
+        tax_mode_snapshot=tax["tax_mode"],
+        gstin_snapshot=tax["gstin"],
         created_by=user.id,
         activated_at=now if total_due == Decimal("0.00") else None,
     )
@@ -726,7 +729,10 @@ async def _create_invoice(
         return invoice
     invoice_number = f"INV-{subscription.organization_id}-{subscription.id:08d}"
     subtotal = subscription.plan_price_snapshot + subscription.joining_fee_snapshot
-    tax = await calculate_tax(db, subscription.organization_id, subtotal)
+    tax = calculate_tax_snapshot(
+        subtotal, subscription.gst_rate_snapshot,
+        subscription.tax_mode_snapshot, subscription.gstin_snapshot,
+    )
     invoice = Invoice(
         organization_id=subscription.organization_id,
         subscription_id=subscription.id,
@@ -770,7 +776,10 @@ async def record_manual_payment(
         raise _http_error(409, "Only pending-payment subscriptions can receive this payment")
 
     subtotal = subscription.plan_price_snapshot + subscription.joining_fee_snapshot
-    tax = await calculate_tax(db, organization_id, subtotal)
+    tax = calculate_tax_snapshot(
+        subtotal, subscription.gst_rate_snapshot,
+        subscription.tax_mode_snapshot, subscription.gstin_snapshot,
+    )
     amount_due = tax["total_amount"]
     if amount_due <= Decimal("0.00"):
         raise _http_error(409, "No payment is due for this subscription")

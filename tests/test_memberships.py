@@ -92,6 +92,12 @@ async def test_membership_plan_subscription_payment_invoice_and_private_document
     assert subscription["joining_fee_snapshot"] == "50.00"
     assert subscription["access_gym_ids"] == [gym_id]
 
+    access_before_payment = await client.get(
+        f"/gyms/{gym_id}/members/{member_id}/membership-access"
+    )
+    assert access_before_payment.status_code == 200
+    assert access_before_payment.json()["data"]["has_access"] is False
+
     payment_response = await client.post(
         f"/gyms/{gym_id}/subscriptions/{subscription_id}/payments/manual",
         json={"payment_method": "upi", "provider_reference": "TEST-UPI-001"},
@@ -105,6 +111,13 @@ async def test_membership_plan_subscription_payment_invoice_and_private_document
     )
     assert subscription_detail.status_code == 200
     assert subscription_detail.json()["data"]["status"] == "active"
+
+    access_after_payment = await client.get(
+        f"/gyms/{gym_id}/members/{member_id}/membership-access"
+    )
+    assert access_after_payment.status_code == 200
+    assert access_after_payment.json()["data"]["has_access"] is True
+    assert access_after_payment.json()["data"]["active_subscription_ids"] == [subscription_id]
 
     invoice_response = await client.get(
         f"/gyms/{gym_id}/subscriptions/{subscription_id}/invoice"

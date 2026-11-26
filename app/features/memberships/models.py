@@ -100,6 +100,7 @@ class MembershipPlanRules(Base):
     __table_args__ = (
         CheckConstraint("max_freeze_days IS NULL OR max_freeze_days >= 0", name="ck_membership_plan_rules_freeze_days_nonnegative"),
         CheckConstraint("freeze_allowed OR max_freeze_days IS NULL OR max_freeze_days = 0", name="ck_membership_plan_rules_freeze_disabled"),
+        CheckConstraint("transfer_allowed IS FALSE", name="ck_membership_plan_rules_transfer_disabled"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

@@ -242,6 +242,12 @@ class InvoiceResponse(BaseModel):
     invoice_number: str
     subtotal: Decimal
     tax_amount: Decimal
+    gst_rate: Decimal
+    cgst_amount: Decimal
+    sgst_amount: Decimal
+    igst_amount: Decimal
+    gstin_snapshot: str | None
+    tax_mode_snapshot: str
     total_amount: Decimal
     currency: str
     status: str

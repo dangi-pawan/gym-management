@@ -19,6 +19,7 @@ from app.features.memberships.models import (
     MembershipPlanAccessGym,
     MembershipPlanRules,
     MembershipTerms,
+    MembershipDocument,
     Payment,
     SubscriptionAccessGym,
     SubscriptionTermsAcceptance,

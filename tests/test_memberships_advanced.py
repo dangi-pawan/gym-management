@@ -361,6 +361,43 @@ async def test_refund_webhook_recovers_missing_provider_id_and_deduplicates(
         assert refund.provider_refund_id == "rfnd_refund_recovery"
         assert payment.status == "partially_refunded"
 
+    # A second ambiguous refund can be reconciled by retrying the same
+    # persisted operation, not by creating a new provider refund.
+    monkeypatch.setattr(membership_service, "razorpay_create_refund", uncertain_refund)
+    second = await client.post(
+        f"/gyms/{gym_id}/payments/{payment_id}/refunds",
+        json={"amount": "25.00", "reason": "Retry test"},
+    )
+    assert second.status_code == 502
+    async with Session() as session:
+        second_refund = await session.scalar(
+            select(PaymentRefund)
+            .where(PaymentRefund.payment_id == payment_id)
+            .order_by(PaymentRefund.id.desc())
+        )
+        second_refund_id = second_refund.id
+        persisted_key = second_refund.idempotency_key
+
+    retry_call = {}
+
+    async def accepted_refund(provider_payment_id, amount_paise, notes, idempotency_key):
+        retry_call.update(
+            payment_id=provider_payment_id,
+            amount_paise=amount_paise,
+            notes=notes,
+            idempotency_key=idempotency_key,
+        )
+        return {"id": "rfnd_retry_recovered", "status": "pending"}
+
+    monkeypatch.setattr(membership_service, "razorpay_create_refund", accepted_refund)
+    retried = await client.post(
+        f"/gyms/{gym_id}/refunds/{second_refund_id}/retry"
+    )
+    assert retried.status_code == 200
+    assert retry_call["idempotency_key"] == persisted_key
+    assert retry_call["amount_paise"] == 2500
+    assert retried.json()["data"]["provider_refund_id"] == "rfnd_retry_recovered"
+
 
 def test_razorpay_refund_request_sends_stable_idempotency_header(monkeypatch):
     import asyncio

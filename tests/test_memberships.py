@@ -92,6 +92,13 @@ async def test_membership_plan_subscription_payment_invoice_and_private_document
     assert subscription["joining_fee_snapshot"] == "50.00"
     assert subscription["access_gym_ids"] == [gym_id]
 
+    plan_edit = await client.patch(
+        f"/organizations/{organization_id}/membership-plans/{plan_id}",
+        json={"base_price": "2000.00", "joining_fee": "200.00"},
+    )
+    assert plan_edit.status_code == 200
+    assert plan_edit.json()["data"]["base_price"] == "2000.00"
+
     access_before_payment = await client.get(
         f"/gyms/{gym_id}/members/{member_id}/membership-access"
     )
@@ -302,3 +309,32 @@ async def test_all_gyms_subscription_grants_access_at_other_branch(
         f"/gyms/{access_gym}/subscriptions/{subscription_id}/invoice"
     )
     assert visible_invoice.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_membership_plan_rejects_invalid_duration_and_price(
+    client,
+    organization_id,
+):
+    response = await client.post(
+        f"/organizations/{organization_id}/membership-plans",
+        json={
+            "name": "Invalid Plan",
+            "duration_value": 0,
+            "duration_unit": "month",
+            "base_price": "-1.00",
+            "access_type": "home_gym",
+        },
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_membership_plan_endpoint_rejects_another_organization_id(
+    client,
+    organization_id,
+):
+    response = await client.get(
+        f"/organizations/{organization_id + 100000}/membership-plans"
+    )
+    assert response.status_code == 404

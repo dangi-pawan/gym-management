@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.features.gyms.models import Gym
 from app.features.members.models import Member
+from app.features.memberships.models import MemberGymAssignment
 from app.features.members.schemas import MemberCreate, MemberUpdate
 
 
@@ -12,19 +13,31 @@ async def create_member(
     gym_id: int,
     member_data: MemberCreate
 ):
-    gym_query = select(Gym.id).where(Gym.id == gym_id)
+    gym_query = select(Gym).where(Gym.id == gym_id)
     gym_result = await db.execute(gym_query)
+    gym = gym_result.scalar_one_or_none()
 
-    if gym_result.scalar_one_or_none() is None:
+    if gym is None:
         return None
 
     new_member = Member(
         gym_id=gym_id,
+        organization_id=gym.organization_id,
         name=member_data.name,
-        age=member_data.age
+        age=member_data.age,
     )
 
     db.add(new_member)
+    await db.flush()
+    db.add(
+        MemberGymAssignment(
+            organization_id=gym.organization_id,
+            member_id=new_member.id,
+            gym_id=gym_id,
+            is_primary=True,
+            status="active",
+        )
+    )
     await db.commit()
     await db.refresh(new_member)
 

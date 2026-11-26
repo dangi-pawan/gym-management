@@ -600,7 +600,6 @@ async def razorpay_webhook_endpoint(
 
 @router.post(
     "/gyms/{gym_id}/subscriptions/{subscription_id}/freeze",
-    response_model=SubscriptionFreezeResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def freeze_subscription_endpoint(
@@ -622,7 +621,6 @@ async def freeze_subscription_endpoint(
 
 @router.post(
     "/gyms/{gym_id}/payments/{payment_id}/refunds",
-    response_model=RefundResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def refund_payment_endpoint(

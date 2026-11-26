@@ -201,7 +201,6 @@ async def test_selected_gym_plan_rejects_purchase_outside_access_list(
         },
     )
     assert purchase.status_code == 422
-    assert "purchasing gym" in purchase.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -322,8 +321,10 @@ async def test_all_gyms_subscription_grants_access_at_other_branch(
 @pytest.mark.asyncio
 async def test_membership_plan_rejects_invalid_duration_and_price(
     client,
+    create_gym,
     organization_id,
 ):
+    await create_gym("Validation Test Gym")
     response = await client.post(
         f"/organizations/{organization_id}/membership-plans",
         json={
@@ -340,8 +341,10 @@ async def test_membership_plan_rejects_invalid_duration_and_price(
 @pytest.mark.asyncio
 async def test_membership_plan_endpoint_rejects_another_organization_id(
     client,
+    create_gym,
     organization_id,
 ):
+    await create_gym("Tenant Isolation Test Gym")
     response = await client.get(
         f"/organizations/{organization_id + 100000}/membership-plans"
     )

@@ -16,6 +16,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    op.execute("UPDATE membership_plan_rules SET transfer_allowed = false WHERE transfer_allowed IS TRUE")
+    op.create_check_constraint("ck_membership_plan_rules_transfer_disabled", "membership_plan_rules", "transfer_allowed IS FALSE")
     op.add_column("member_subscriptions", sa.Column("gst_rate_snapshot", sa.Numeric(5, 2), server_default="0", nullable=False))
     op.add_column("member_subscriptions", sa.Column("tax_mode_snapshot", sa.String(20), server_default="intra_state", nullable=False))
     op.add_column("member_subscriptions", sa.Column("gstin_snapshot", sa.String(15), nullable=True))
@@ -99,6 +101,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_constraint("ck_membership_plan_rules_transfer_disabled", "membership_plan_rules", type_="check")
     op.drop_table("payment_webhook_events")
     op.drop_index("ix_payment_refunds_org_payment", table_name="payment_refunds")
     op.drop_table("payment_refunds")

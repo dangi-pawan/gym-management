@@ -71,7 +71,7 @@ async def get_all_members(
     count_query = (
         select(func.count(Member.id))
         .select_from(Member)
-        .join(MemberGymAssignment, *assignment_join)
+        .join(MemberGymAssignment, assignment_join)
         .where(
             MemberGymAssignment.gym_id == gym_id,
             MemberGymAssignment.status == "active",

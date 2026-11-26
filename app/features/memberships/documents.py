@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import os
 from io import BytesIO
@@ -76,7 +77,10 @@ async def create_private_pdf_document(
         f"{document_type}-{uuid4().hex}.pdf"
     )
     if settings.MEMBERSHIP_S3_BUCKET:
-        upload_private_object(storage_key, content, "application/pdf")
+        # boto3 is synchronous; keep network and retry latency off the event loop.
+        await asyncio.to_thread(
+            upload_private_object, storage_key, content, "application/pdf"
+        )
     else:
         target = private_document_path(storage_key)
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

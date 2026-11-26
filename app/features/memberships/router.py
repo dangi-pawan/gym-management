@@ -1,6 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.responses.helpers import success_response
@@ -9,6 +10,8 @@ from app.features.memberships.schemas import (
     GymMembershipPlanUpdate,
     InvoiceResponse,
     ManualPaymentCreate,
+    MembershipDocumentListEnvelope,
+    MembershipDocumentResponse,
     MemberGymAssignmentCreate,
     MemberGymAssignmentResponse,
     MembershipPlanCreate,
@@ -29,6 +32,7 @@ from app.features.memberships.schemas import (
     SubscriptionRenew,
     InvoiceEnvelope,
 )
+from app.features.memberships.documents import private_document_path
 from app.features.memberships.service import (
     activate_membership_plan,
     assign_member_to_gym,
@@ -42,6 +46,8 @@ from app.features.memberships.service import (
     get_gym_subscription,
     get_membership_plan,
     get_subscription_invoice,
+    get_subscription_document,
+    list_subscription_documents,
     list_gym_membership_plans,
     list_member_subscriptions,
     list_membership_plans,
@@ -453,3 +459,54 @@ async def renew_subscription_endpoint(
         data.acceptance_method,
     )
     return success_response(message="Subscription renewal created", data=subscription)
+
+
+@router.get(
+    "/gyms/{gym_id}/subscriptions/{subscription_id}/documents",
+    response_model=MembershipDocumentListEnvelope,
+)
+async def list_subscription_documents_endpoint(
+    gym_id: int,
+    subscription_id: int,
+    current_user: Annotated[User, Depends(require_gym_roles("manager", "receptionist"))],
+    db: AsyncSession = Depends(get_db),
+):
+    documents = await list_subscription_documents(
+        db, current_user.organization_id, gym_id, subscription_id
+    )
+    return success_response(
+        message="Subscription documents fetched successfully",
+        data=[MembershipDocumentResponse.model_validate(item) for item in documents],
+    )
+
+
+@router.get(
+    "/gyms/{gym_id}/subscriptions/{subscription_id}/documents/{document_id}",
+)
+async def download_subscription_document_endpoint(
+    gym_id: int,
+    subscription_id: int,
+    document_id: int,
+    current_user: Annotated[User, Depends(require_gym_roles("manager", "receptionist"))],
+    db: AsyncSession = Depends(get_db),
+):
+    document = await get_subscription_document(
+        db,
+        current_user.organization_id,
+        gym_id,
+        subscription_id,
+        document_id,
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        path = private_document_path(document.storage_key)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Document not found") from None
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Document file not found")
+    return FileResponse(
+        path=path,
+        media_type=document.content_type,
+        filename=f"membership-{document.document_type}-{document.id}.pdf",
+    )

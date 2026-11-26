@@ -157,6 +157,8 @@ async def handle_razorpay_webhook(
         raise _error(400, "Invalid Razorpay webhook signature")
     try:
         payload = json.loads(raw_body)
+        if payload.get("event") != "payment.captured":
+            return {"received": True, "ignored": True}
         entity = payload["payload"]["payment"]["entity"]
         order_id = entity["order_id"]
         provider_payment_id = entity["id"]
@@ -327,6 +329,8 @@ async def refund_payment(
         raise _error(404, "Payment not found")
     if payment.provider != "razorpay" or payment.status not in {"succeeded", "partially_refunded"} or not payment.provider_payment_id:
         raise _error(409, "Only successfully captured Razorpay payments can be refunded automatically")
+    if not (payment and (await db.get(MemberSubscription, payment.subscription_id)).rules_snapshot.get("refund_allowed", False)):
+        raise _error(403, "Refunds are not allowed by this membership plan")
     refunded = await db.scalar(
         select(func.coalesce(func.sum(PaymentRefund.amount), 0)).where(
             PaymentRefund.organization_id == organization_id,

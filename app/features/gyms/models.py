@@ -27,7 +27,8 @@ class Gym(Base):
     )
 
     members: Mapped[list["Member"]] = relationship(
-        back_populates="gym"
+        back_populates="gym",
+        foreign_keys="Member.gym_id",
     )
 
     __table_args__ = (

@@ -18,13 +18,11 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.execute("UPDATE membership_plan_rules SET transfer_allowed = false WHERE transfer_allowed IS TRUE")
     op.create_check_constraint("ck_membership_plan_rules_transfer_disabled", "membership_plan_rules", "transfer_allowed IS FALSE")
+    op.execute("UPDATE membership_plan_rules SET auto_renew_allowed = false WHERE auto_renew_allowed IS TRUE")
+    op.create_check_constraint("ck_membership_plan_rules_auto_renew_disabled", "membership_plan_rules", "auto_renew_allowed IS FALSE")
     op.add_column("member_subscriptions", sa.Column("gst_rate_snapshot", sa.Numeric(5, 2), server_default="0", nullable=False))
     op.add_column("member_subscriptions", sa.Column("tax_mode_snapshot", sa.String(20), server_default="intra_state", nullable=False))
     op.add_column("member_subscriptions", sa.Column("gstin_snapshot", sa.String(15), nullable=True))
-    op.add_column("member_subscriptions", sa.Column("auto_renew_enabled", sa.Boolean(), server_default=sa.text("false"), nullable=False))
-    op.add_column("member_subscriptions", sa.Column("razorpay_subscription_id", sa.String(100), nullable=True))
-    op.create_unique_constraint("uq_member_subscriptions_razorpay_subscription", "member_subscriptions", ["razorpay_subscription_id"])
-
     op.add_column("payments", sa.Column("provider_order_id", sa.String(100), nullable=True))
     op.add_column("payments", sa.Column("provider_payment_id", sa.String(100), nullable=True))
     op.create_unique_constraint("uq_payments_id_org", "payments", ["id", "organization_id"])
@@ -101,6 +99,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_constraint("ck_membership_plan_rules_auto_renew_disabled", "membership_plan_rules", type_="check")
     op.drop_constraint("ck_membership_plan_rules_transfer_disabled", "membership_plan_rules", type_="check")
     op.drop_table("payment_webhook_events")
     op.drop_index("ix_payment_refunds_org_payment", table_name="payment_refunds")
@@ -122,6 +121,3 @@ def downgrade() -> None:
     op.drop_column("member_subscriptions", "gstin_snapshot")
     op.drop_column("member_subscriptions", "tax_mode_snapshot")
     op.drop_column("member_subscriptions", "gst_rate_snapshot")
-    op.drop_constraint("uq_member_subscriptions_razorpay_subscription", "member_subscriptions", type_="unique")
-    op.drop_column("member_subscriptions", "razorpay_subscription_id")
-    op.drop_column("member_subscriptions", "auto_renew_enabled")

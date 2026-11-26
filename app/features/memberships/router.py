@@ -644,7 +644,6 @@ async def refund_payment_endpoint(
 
 @router.post(
     "/gyms/{gym_id}/refunds/{refund_id}/retry",
-    response_model=APIResponse[RefundResponse],
 )
 async def retry_pending_refund_endpoint(
     gym_id: int,

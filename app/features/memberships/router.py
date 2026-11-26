@@ -9,6 +9,8 @@ from app.features.memberships.schemas import (
     GymMembershipPlanUpdate,
     InvoiceResponse,
     ManualPaymentCreate,
+    MemberGymAssignmentCreate,
+    MemberGymAssignmentResponse,
     MembershipPlanCreate,
     MembershipPlanListEnvelope,
     MembershipPlanResponse,
@@ -28,6 +30,9 @@ from app.features.memberships.schemas import (
 )
 from app.features.memberships.service import (
     activate_membership_plan,
+    assign_member_to_gym,
+    list_member_gym_assignments,
+    remove_member_gym_assignment,
     archive_membership_plan,
     cancel_subscription,
     create_membership_plan,
@@ -360,3 +365,64 @@ async def get_subscription_invoice_endpoint(
         message="Invoice fetched successfully",
         data=InvoiceResponse.model_validate(invoice),
     )
+
+
+@router.post(
+    "/organizations/{organization_id}/members/{member_id}/gym-assignments",
+    status_code=status.HTTP_201_CREATED,
+)
+async def assign_member_gym_endpoint(
+    organization_id: int,
+    member_id: int,
+    data: MemberGymAssignmentCreate,
+    current_user: Annotated[User, Depends(require_org_roles("owner", "admin"))],
+    db: AsyncSession = Depends(get_db),
+):
+    _ensure_current_organization(organization_id, current_user)
+    assignment = await assign_member_to_gym(
+        db,
+        organization_id,
+        member_id,
+        data.gym_id,
+        data.is_primary,
+    )
+    return success_response(
+        message="Member assigned to gym successfully",
+        data=MemberGymAssignmentResponse.model_validate(assignment),
+    )
+
+
+@router.get(
+    "/organizations/{organization_id}/members/{member_id}/gym-assignments",
+)
+async def list_member_gym_assignments_endpoint(
+    organization_id: int,
+    member_id: int,
+    current_user: Annotated[User, Depends(require_org_roles("owner", "admin"))],
+    db: AsyncSession = Depends(get_db),
+):
+    _ensure_current_organization(organization_id, current_user)
+    assignments = await list_member_gym_assignments(db, organization_id, member_id)
+    return success_response(
+        message="Member gym assignments fetched successfully",
+        data=[MemberGymAssignmentResponse.model_validate(item) for item in assignments],
+    )
+
+
+@router.delete(
+    "/organizations/{organization_id}/members/{member_id}/gym-assignments/{gym_id}",
+)
+async def remove_member_gym_assignment_endpoint(
+    organization_id: int,
+    member_id: int,
+    gym_id: int,
+    current_user: Annotated[User, Depends(require_org_roles("owner", "admin"))],
+    db: AsyncSession = Depends(get_db),
+):
+    _ensure_current_organization(organization_id, current_user)
+    removed = await remove_member_gym_assignment(
+        db, organization_id, member_id, gym_id
+    )
+    if not removed:
+        raise HTTPException(status_code=404, detail="Member gym assignment not found")
+    return success_response(message="Member gym assignment removed")

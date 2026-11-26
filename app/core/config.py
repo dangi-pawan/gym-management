@@ -62,7 +62,6 @@ class Settings(BaseSettings):
     MEMBERSHIP_S3_ACCESS_KEY_ID: str | None = None
     MEMBERSHIP_S3_SECRET_ACCESS_KEY: str | None = None
     MEMBERSHIP_S3_PREFIX: str = "membership-documents"
-    MEMBERSHIP_S3_PRESIGNED_URL_SECONDS: int = Field(default=300, gt=0, le=3600)
 
     # GST is configured at organization level in the membership tax settings table.
     MEMBERSHIP_DEFAULT_GST_RATE: Decimal = Field(default=Decimal("0.00"), ge=0, le=100)

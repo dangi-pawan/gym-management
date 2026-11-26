@@ -16,6 +16,13 @@ class Gym(Base):
         nullable=False,
     )
 
+    timezone: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="Asia/Kolkata",
+        server_default="Asia/Kolkata",
+    )
+
     organization_id: Mapped[int] = mapped_column(
         ForeignKey("organizations.id", name="fk_gyms_organization_id_organizations"),
         nullable=False,

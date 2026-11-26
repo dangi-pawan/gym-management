@@ -211,6 +211,7 @@ async def handle_razorpay_webhook(
         refund_record.status = "processed" if event_type == "refund.processed" else "failed"
         if refund_record.status == "processed":
             refund_record.processed_at = datetime.now(timezone.utc)
+        await db.flush()
         payment_record = await db.get(Payment, refund_record.payment_id)
         if payment_record is not None:
             processed_total = await db.scalar(
@@ -438,6 +439,7 @@ async def refund_payment(
     else:
         refund.status = "pending"
     if refund.status == "processed":
+        await db.flush()
         total_processed = await db.scalar(
             select(func.coalesce(func.sum(PaymentRefund.amount), 0)).where(
                 PaymentRefund.organization_id == organization_id,

@@ -4,6 +4,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.features.gyms.models import Gym
 from app.features.gyms.schemas import GymCreate, GymUpdate
 from app.features.members.models import Member
+from app.features.memberships.models import (
+    GymMembershipPlan,
+    MemberGymAssignment,
+    MemberSubscription,
+    MembershipPlanAccessGym,
+    SubscriptionAccessGym,
+)
 from app.features.users.gym_staff import GymStaff
 from app.features.users.organization_staff import OrganizationStaff
 
@@ -102,10 +109,29 @@ async def delete_gym(db: AsyncSession, gym_id: int):
         return "not_found"
 
     member_exists = await db.scalar(
+        select(
+            exists().where(
+                MemberGymAssignment.gym_id == gym_id,
+                MemberGymAssignment.status == "active",
+            )
+        )
+    )
+    legacy_member_exists = await db.scalar(
         select(exists().where(Member.gym_id == gym_id))
     )
-    if member_exists:
+    if member_exists or legacy_member_exists:
         return "has_members"
+
+    membership_history_exists = await db.scalar(
+        select(
+            exists().where(GymMembershipPlan.gym_id == gym_id)
+            | exists().where(MembershipPlanAccessGym.gym_id == gym_id)
+            | exists().where(MemberSubscription.purchased_at_gym_id == gym_id)
+            | exists().where(SubscriptionAccessGym.gym_id == gym_id)
+        )
+    )
+    if membership_history_exists:
+        return "has_memberships"
 
     await db.delete(gym)
     await db.commit()

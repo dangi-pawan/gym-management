@@ -174,3 +174,41 @@ async def test_auto_renew_is_rejected_until_recurring_mandates_are_supported(
         },
     )
     assert response.status_code == 422
+
+
+
+def test_gst_calculation_splits_intra_state_and_inter_state_tax():
+    from decimal import Decimal
+
+    from app.features.memberships.advanced_service import calculate_tax_snapshot
+
+    intra = calculate_tax_snapshot(
+        Decimal("1000.00"), Decimal("18.00"), "intra_state", "GSTIN",
+    )
+    assert intra["cgst_amount"] == Decimal("90.00")
+    assert intra["sgst_amount"] == Decimal("90.00")
+    assert intra["igst_amount"] == Decimal("0.00")
+    assert intra["total_amount"] == Decimal("1180.00")
+
+    inter = calculate_tax_snapshot(
+        Decimal("1000.00"), Decimal("18.00"), "inter_state", "GSTIN",
+    )
+    assert inter["cgst_amount"] == Decimal("0.00")
+    assert inter["sgst_amount"] == Decimal("0.00")
+    assert inter["igst_amount"] == Decimal("180.00")
+
+
+def test_razorpay_webhook_signature_uses_constant_time_hmac(monkeypatch):
+    import hashlib
+    import hmac
+
+    from app.core.config import settings
+    from app.features.memberships.razorpay import verify_webhook_signature
+
+    secret = "test-webhook-secret"
+    body = b'{"event":"payment.captured"}'
+    monkeypatch.setattr(settings, "RAZORPAY_WEBHOOK_SECRET", secret)
+    signature = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+    assert verify_webhook_signature(body, signature) is True
+    assert verify_webhook_signature(body, "invalid") is False

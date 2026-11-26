@@ -518,6 +518,7 @@ async def _submit_pending_refund(
     if refund is None:
         raise _error(409, "Refund is already being reconciled or has a provider ID")
 
+    pending_refund_id = refund.id
     try:
         provider_result = await razorpay_create_refund(
             payment.provider_payment_id,
@@ -530,11 +531,18 @@ async def _submit_pending_refund(
         )
     except RazorpayConfigurationError:
         await db.rollback()
-        raise _error(503, "Razorpay is not configured; refund remains pending") from None
+        raise _error(
+            503,
+            f"Razorpay is not configured; refund {pending_refund_id} remains pending",
+        ) from None
     except Exception as exc:
         await db.rollback()
         if isinstance(exc, RazorpayError):
-            raise _error(502, "Refund status is unconfirmed; retry the same refund to reconcile it") from None
+            raise _error(
+                502,
+                f"Refund status is unconfirmed; refund {pending_refund_id} remains pending. "
+                f"Retry it at /gyms/{gym_id}/refunds/{pending_refund_id}/retry",
+            ) from None
         raise
 
     if refund.provider_refund_id and refund.provider_refund_id != provider_result["id"]:

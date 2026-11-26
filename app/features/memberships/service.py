@@ -1083,3 +1083,47 @@ async def renew_subscription(
     return await create_subscription(
         db, organization_id, gym_id, user, renewal
     )
+
+
+async def list_subscription_documents(
+    db: AsyncSession,
+    organization_id: int,
+    gym_id: int,
+    subscription_id: int,
+) -> list[MembershipDocument]:
+    subscription = await get_gym_subscription(
+        db, organization_id, gym_id, subscription_id
+    )
+    if subscription is None:
+        raise _http_error(404, "Subscription not found")
+    result = await db.execute(
+        select(MembershipDocument)
+        .where(
+            MembershipDocument.organization_id == organization_id,
+            MembershipDocument.subscription_id == subscription_id,
+        )
+        .order_by(MembershipDocument.generated_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_subscription_document(
+    db: AsyncSession,
+    organization_id: int,
+    gym_id: int,
+    subscription_id: int,
+    document_id: int,
+) -> MembershipDocument | None:
+    subscription = await get_gym_subscription(
+        db, organization_id, gym_id, subscription_id
+    )
+    if subscription is None:
+        return None
+    result = await db.execute(
+        select(MembershipDocument).where(
+            MembershipDocument.id == document_id,
+            MembershipDocument.organization_id == organization_id,
+            MembershipDocument.subscription_id == subscription_id,
+        )
+    )
+    return result.scalar_one_or_none()

@@ -362,6 +362,8 @@ All routes require the existing cookie authentication and CSRF behavior. Organiz
 
 A manual payment amount is derived server-side from the stored subscription price and joining-fee snapshots; the client cannot choose the amount. A payment reference is unique for the manual provider. Pending subscriptions do not grant access. A subscription is eligible only when its status is active and the gym-local date is within the inclusive start/exclusive end interval.
 
+The existing `DELETE /gyms/{gym_id}/members/{member_id}` operation now deactivates that member's gym assignment rather than deleting the organization-level member identity or subscription history.
+
 ## 9. Documentation and test requirements
 
 Keep this document updated with actual implemented behavior. Add:
@@ -417,3 +419,27 @@ Current MVP boundaries that must be understood before production rollout:
 Do not merge until the test database migration, complete automated suite, and manual Swagger scenarios pass. Never reset or recreate the development database.
 
 No application models, routers, migrations, or tests are implied by this design document alone; those are subsequent implementation steps.
+
+
+## 11. Manual Swagger walkthrough
+
+Use only the test database for this walkthrough.
+
+1. Apply the migration and start the API:
+   ```bash
+   ENV_FILE=.env.test alembic upgrade head
+   ENV_FILE=.env.test uvicorn app.main:app --reload
+   ```
+2. Open `http://127.0.0.1:8000/docs`, register or log in as an organization owner, and retain the returned CSRF token for write requests.
+3. Create two gyms. Confirm their timezone defaults to `Asia/Kolkata`, then optionally update one with another valid IANA timezone.
+4. Create a member at the first gym. Use the organization member gym-assignment endpoint to assign that member to the second gym and mark it primary. Confirm the member appears in both gyms' member lists.
+5. Create membership terms, publish the terms version, and create a membership plan referencing that published terms version.
+6. Configure the plan as available at the first gym with a gym-specific price override, then activate the plan.
+7. Create a subscription for the member. Confirm its price, joining fee, rules, terms hash/version, and allowed gym IDs are captured as snapshots.
+8. Check membership access before payment; it must be false while the subscription is pending payment.
+9. Record a manual payment using a test reference. Confirm the payment is succeeded, the subscription is active, and an invoice is issued.
+10. Check membership access again; it must now be true at each gym in the subscription's access snapshot.
+11. List the subscription documents and download the agreement, invoice, and receipt PDFs through the authenticated document endpoint.
+12. Try a selected-gyms plan that excludes the purchasing gym; the purchase must be rejected. Also verify that a trainer cannot create plans, subscriptions, or payments.
+
+After the walkthrough, run the full test suite. Do not point the API at the development database for these checks.

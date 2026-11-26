@@ -443,3 +443,53 @@ Use only the test database for this walkthrough.
 12. Try a selected-gyms plan that excludes the purchasing gym; the purchase must be rejected. Also verify that a trainer cannot create plans, subscriptions, or payments.
 
 After the walkthrough, run the full test suite. Do not point the API at the development database for these checks.
+
+
+## 11. Extended billing and operational workflows
+
+The follow-up implementation adds:
+
+- **Razorpay one-time checkout:** the server creates the order from the subscription's immutable amount/tax snapshot. A subscription stays pending_payment until a valid payment.captured webhook is received. The webhook HMAC is verified using RAZORPAY_WEBHOOK_SECRET; the captured amount must match the server-side order. Event IDs are stored for idempotency. Browser callbacks never activate access.
+- **GST snapshots:** each organization can configure a GST percentage, GSTIN and tax mode (intra_state or inter_state). New subscriptions snapshot this policy. Intra-state tax is split into CGST/SGST; inter-state tax is IGST. Later tax-setting changes do not rewrite existing subscription quotes or invoices. The default GST rate is zero. The rate, place-of-supply treatment, SAC classification, invoice wording, GST registration and filing treatment must be confirmed by the organization's tax professional before issuing real tax invoices.
+- **Refunds:** full or partial refunds can be initiated for captured Razorpay payments only when the purchased plan allows refunds. Refund requests are capped at the remaining captured amount and recorded with the provider refund ID. Cash/UPI/card/bank-transfer manual refunds must be executed outside this API and reconciled by staff; the API does not claim to send those funds.
+- **Subscription freezes:** staff can apply a non-overlapping freeze period to an active subscription when the plan allows it. The configured maximum is enforced, the subscription end date is extended by the frozen days, and access checks deny entry during the frozen interval.
+- **Membership expiry job:** run ENV_FILE=.env python3 -m scripts.expire_memberships periodically (for example, every 15 minutes using cron or a managed scheduler). It is idempotent and evaluates each subscription using its purchasing gym's IANA timezone.
+- **Private S3-compatible documents:** when MEMBERSHIP_S3_BUCKET is set, PDF bytes are written to a private S3-compatible bucket and served only through the authenticated application endpoint. In development/test, local private storage remains available. Production settings reject startup without an S3 bucket.
+
+### Added configuration
+
+Razorpay:
+- RAZORPAY_KEY_ID
+- RAZORPAY_KEY_SECRET
+- RAZORPAY_WEBHOOK_SECRET
+- RAZORPAY_API_BASE_URL
+
+S3-compatible storage:
+- MEMBERSHIP_S3_BUCKET
+- MEMBERSHIP_S3_REGION
+- MEMBERSHIP_S3_ENDPOINT_URL (optional for AWS S3; set for compatible providers)
+- MEMBERSHIP_S3_ACCESS_KEY_ID / MEMBERSHIP_S3_SECRET_ACCESS_KEY (optional when workload IAM credentials are used)
+- MEMBERSHIP_S3_PREFIX
+- MEMBERSHIP_S3_PRESIGNED_URL_SECONDS
+
+Organization GST:
+- PUT /organizations/{organization_id}/membership-tax-settings
+
+Online payment:
+- POST /gyms/{gym_id}/subscriptions/{subscription_id}/payments/razorpay-order
+- POST /payments/razorpay/webhook (configure this exact URL in the Razorpay dashboard and subscribe to payment.captured and payment.failed)
+
+Freeze:
+- POST /gyms/{gym_id}/subscriptions/{subscription_id}/freeze
+
+Refund:
+- POST /gyms/{gym_id}/payments/{payment_id}/refunds
+
+### Explicitly unsupported / production gates
+
+- **Person-to-person membership transfer is prohibited.** The API schema rejects transfer_allowed=true; gym access assignments remain a separate operation.
+- **Automatic recurring renewal is not yet enabled.** The plan may express an auto-renew policy, but recurring Razorpay mandate creation, customer authorization, recurring charge webhooks, per-cycle invoices, retries and mandate cancellation are not implemented. Do not enable or advertise automatic charging until this workflow is built and tested with explicit member mandate consent.
+- Razorpay and S3 credentials, a webhook endpoint reachable by Razorpay, bucket private-access policy, encryption, backups, retention and monitoring must be configured in the deployment environment. Never commit credentials.
+- Razorpay refunds are provider-driven and may remain pending at Razorpay after the API accepts a request; production reconciliation should consume refund webhooks and reconcile provider settlement reports.
+- The tax implementation provides configurable arithmetic and snapshots; it is not tax/legal advice and does not determine the correct GST rate, SAC code, place of supply or registration obligations.
+- Terms acceptance, GST treatment, refund/cancellation wording and document retention require Indian legal/accounting review before production launch.

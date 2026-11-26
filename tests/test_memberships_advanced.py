@@ -354,6 +354,21 @@ async def test_refund_webhook_recovers_missing_provider_id_and_deduplicates(
     assert duplicate.status_code == 200
     assert duplicate.json()["data"]["duplicate"] is True
 
+    # A delayed failure event must not downgrade a refund already processed.
+    failed_payload = json.loads(json.dumps(event_payload))
+    failed_payload["event"] = "refund.failed"
+    failed_headers = {
+        "X-Razorpay-Signature": "test-signature",
+        "X-Razorpay-Event-Id": "evt_refund_late_failure",
+    }
+    late_failure = await client.post(
+        "/payments/razorpay/webhook",
+        content=json.dumps(failed_payload),
+        headers=failed_headers,
+    )
+    assert late_failure.status_code == 200
+    assert late_failure.json()["data"]["refund_status"] == "processed"
+
     async with Session() as session:
         refund = await session.get(PaymentRefund, refund_id)
         payment = await session.get(Payment, payment_id)

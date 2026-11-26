@@ -187,6 +187,14 @@ class SubscriptionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class MembershipAccessResponse(BaseModel):
+    member_id: int
+    gym_id: int
+    has_access: bool
+    checked_on: date
+    active_subscription_ids: list[int] = Field(default_factory=list)
+
+
 class MembershipDocumentResponse(BaseModel):
     id: int
     subscription_id: int | None
@@ -235,3 +243,4 @@ SubscriptionListEnvelope = APIResponse[list[SubscriptionResponse]]
 PaymentEnvelope = APIResponse[PaymentResponse]
 InvoiceEnvelope = APIResponse[InvoiceResponse]
 MembershipDocumentListEnvelope = APIResponse[list[MembershipDocumentResponse]]
+MembershipAccessEnvelope = APIResponse[MembershipAccessResponse]

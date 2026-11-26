@@ -1127,3 +1127,72 @@ async def get_subscription_document(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def check_member_membership_access(
+    db: AsyncSession,
+    organization_id: int,
+    gym_id: int,
+    member_id: int,
+) -> dict:
+    from zoneinfo import ZoneInfo
+
+    gym_result = await db.execute(
+        select(Gym).where(
+            Gym.id == gym_id,
+            Gym.organization_id == organization_id,
+        )
+    )
+    gym = gym_result.scalar_one_or_none()
+    if gym is None:
+        raise _http_error(404, "Gym not found")
+
+    member_result = await db.execute(
+        select(Member.id).where(
+            Member.id == member_id,
+            Member.organization_id == organization_id,
+        )
+    )
+    if member_result.scalar_one_or_none() is None:
+        raise _http_error(404, "Member not found")
+
+    checked_on = datetime.now(ZoneInfo(gym.timezone)).date()
+    expired_result = await db.execute(
+        select(MemberSubscription).where(
+            MemberSubscription.organization_id == organization_id,
+            MemberSubscription.member_id == member_id,
+            MemberSubscription.status == "active",
+            MemberSubscription.end_date <= checked_on,
+        )
+    )
+    expired_subscriptions = expired_result.scalars().all()
+    for subscription in expired_subscriptions:
+        subscription.status = "expired"
+    if expired_subscriptions:
+        await db.commit()
+
+    access_result = await db.execute(
+        select(MemberSubscription.id)
+        .join(
+            SubscriptionAccessGym,
+            SubscriptionAccessGym.subscription_id == MemberSubscription.id,
+        )
+        .where(
+            MemberSubscription.organization_id == organization_id,
+            MemberSubscription.member_id == member_id,
+            MemberSubscription.status == "active",
+            MemberSubscription.start_date <= checked_on,
+            MemberSubscription.end_date > checked_on,
+            SubscriptionAccessGym.organization_id == organization_id,
+            SubscriptionAccessGym.gym_id == gym_id,
+        )
+        .order_by(MemberSubscription.end_date.desc())
+    )
+    active_ids = list(access_result.scalars().all())
+    return {
+        "member_id": member_id,
+        "gym_id": gym_id,
+        "has_access": bool(active_ids),
+        "checked_on": checked_on,
+        "active_subscription_ids": active_ids,
+    }

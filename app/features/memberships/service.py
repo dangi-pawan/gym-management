@@ -959,3 +959,38 @@ async def remove_member_gym_assignment(
             member.gym_id = remaining[0].gym_id
     await db.commit()
     return True
+
+
+async def renew_subscription(
+    db: AsyncSession,
+    organization_id: int,
+    gym_id: int,
+    user: User,
+    subscription_id: int,
+    start_date: date | None,
+    terms_accepted: bool,
+    acceptance_method: str,
+) -> dict:
+    previous = await get_gym_subscription(
+        db, organization_id, gym_id, subscription_id
+    )
+    if previous is None:
+        raise _http_error(404, "Subscription not found")
+    if previous.status not in {"active", "expired"}:
+        raise _http_error(409, "Only active or expired subscriptions can be renewed")
+
+    earliest_start = max(date.today(), previous.end_date)
+    renewal_start = start_date or earliest_start
+    if renewal_start < earliest_start:
+        raise _http_error(422, "Renewal cannot overlap the previous subscription or start in the past")
+
+    renewal = SubscriptionCreate(
+        member_id=previous.member_id,
+        membership_plan_id=previous.membership_plan_id,
+        start_date=renewal_start,
+        terms_accepted=terms_accepted,
+        acceptance_method=acceptance_method,
+    )
+    return await create_subscription(
+        db, organization_id, gym_id, user, renewal
+    )

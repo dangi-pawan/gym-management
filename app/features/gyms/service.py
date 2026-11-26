@@ -16,6 +16,7 @@ async def create_gym(
     new_gym = Gym(
         name=gym_data.name,
         organization_id=organization_id,
+        timezone=gym_data.timezone,
     )
     db.add(new_gym)
     await db.commit()
@@ -87,6 +88,8 @@ async def update_gym(db: AsyncSession, gym_id: int, gym_data: GymUpdate):
     if gym is None:
         return None
     gym.name = gym_data.name
+    if gym_data.timezone is not None:
+        gym.timezone = gym_data.timezone
     await db.commit()
     await db.refresh(gym)
     return gym

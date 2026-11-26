@@ -321,3 +321,5 @@ class MembershipTaxSettingsResponse(BaseModel):
     gst_rate: Decimal
     gstin: str | None
     tax_mode: str
+
+    model_config = ConfigDict(from_attributes=True)

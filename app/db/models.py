@@ -1,6 +1,12 @@
 from app.features.organizations.models import Organization
 from app.features.gyms.models import Gym
 from app.features.members.models import Member
+from app.features.memberships.models import (
+    MembershipPlan, GymMembershipPlan, MembershipPlanAccessGym,
+    MembershipPlanRules, MembershipTerms, MemberGymAssignment,
+    MemberSubscription, SubscriptionAccessGym, SubscriptionTermsAcceptance,
+    Payment, Invoice, MembershipDocument,
+)
 from app.features.users.models import User
 from app.features.users.gym_staff import GymStaff
 from app.features.users.sessions import AuthSession, RefreshToken
@@ -12,6 +18,18 @@ __all__ = [
     "Organization",
     "Gym",
     "Member",
+    "MembershipPlan",
+    "GymMembershipPlan",
+    "MembershipPlanAccessGym",
+    "MembershipPlanRules",
+    "MembershipTerms",
+    "MemberGymAssignment",
+    "MemberSubscription",
+    "SubscriptionAccessGym",
+    "SubscriptionTermsAcceptance",
+    "Payment",
+    "Invoice",
+    "MembershipDocument",
     "User",
     "GymStaff",
     "AuthSession",

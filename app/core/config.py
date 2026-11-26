@@ -47,6 +47,25 @@ class Settings(BaseSettings):
 
     MEMBERSHIP_DOCUMENTS_DIR: str = ".private/membership-documents"
 
+    # Razorpay credentials are intentionally optional for local/test environments.
+    RAZORPAY_KEY_ID: str | None = None
+    RAZORPAY_KEY_SECRET: str | None = None
+    RAZORPAY_WEBHOOK_SECRET: str | None = None
+    RAZORPAY_API_BASE_URL: str = "https://api.razorpay.com/v1"
+
+    # S3-compatible private object storage. If no bucket is configured, local
+    # private storage remains available for development and tests.
+    MEMBERSHIP_S3_BUCKET: str | None = None
+    MEMBERSHIP_S3_REGION: str = "ap-south-1"
+    MEMBERSHIP_S3_ENDPOINT_URL: str | None = None
+    MEMBERSHIP_S3_ACCESS_KEY_ID: str | None = None
+    MEMBERSHIP_S3_SECRET_ACCESS_KEY: str | None = None
+    MEMBERSHIP_S3_PREFIX: str = "membership-documents"
+    MEMBERSHIP_S3_PRESIGNED_URL_SECONDS: int = Field(default=300, gt=0, le=3600)
+
+    # GST is configured at organization level in the membership tax settings table.
+    MEMBERSHIP_DEFAULT_GST_RATE: Decimal = Field(default=Decimal("0.00"), ge=0, le=100)
+
     @model_validator(mode="after")
     def validate_cookie_settings(self):
         if self.COOKIE_SAMESITE == "none" and not self.COOKIE_SECURE:
@@ -57,6 +76,10 @@ class Settings(BaseSettings):
             raise ValueError("CORS_ORIGINS must be configured in production")
         if self.REFRESH_TOKEN_MAX_DAYS < self.REFRESH_TOKEN_EXPIRE_DAYS:
             raise ValueError("REFRESH_TOKEN_MAX_DAYS must be >= REFRESH_TOKEN_EXPIRE_DAYS")
+        if self.APP_ENV == "production" and not self.MEMBERSHIP_S3_BUCKET:
+            raise ValueError("MEMBERSHIP_S3_BUCKET must be configured in production")
+        if bool(self.RAZORPAY_KEY_ID) != bool(self.RAZORPAY_KEY_SECRET):
+            raise ValueError("RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET must be configured together")
         return self
 
     model_config = SettingsConfigDict(
@@ -64,5 +87,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+
+from decimal import Decimal
 
 settings = Settings()

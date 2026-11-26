@@ -1,3 +1,4 @@
+import hashlib
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -525,6 +526,8 @@ async def download_subscription_document_endpoint(
         content = read_private_document(document.storage_key)
     except (FileNotFoundError, ValueError, OSError):
         raise HTTPException(status_code=404, detail="Document file not found") from None
+    if not hashlib.sha256(content).hexdigest() == document.checksum:
+        raise HTTPException(status_code=500, detail="Stored document integrity check failed")
     return Response(
         content=content,
         media_type=document.content_type,

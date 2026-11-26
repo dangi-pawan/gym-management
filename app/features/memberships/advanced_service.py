@@ -187,7 +187,7 @@ async def handle_razorpay_webhook(
             amount_paise = int(entity["amount"])
         else:
             return {"received": True, "ignored": True}
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, AttributeError):
         raise _error(400, "Invalid Razorpay payment webhook payload") from None
 
     duplicate = await db.scalar(
@@ -428,12 +428,17 @@ async def refund_payment(
             {"internal_refund_id": str(refund.id), "reason": (reason or "Membership refund")[:200]},
         )
     except Exception as exc:
-        refund.status = "failed"
-        await db.commit()
+        # A timeout or 5xx can happen after Razorpay accepted the refund.
+        # Keep the amount reserved as pending until a webhook/reconciliation
+        # confirms the provider's final state; marking it failed could permit
+        # a second refund and overpay the customer.
         if isinstance(exc, RazorpayConfigurationError):
+            refund.status = "failed"
+            await db.commit()
             raise _error(503, "Razorpay is not configured") from None
+        await db.commit()
         if isinstance(exc, RazorpayError):
-            raise _error(502, "Razorpay could not process the refund") from None
+            raise _error(502, "Razorpay refund status is unconfirmed; reconcile before retrying") from None
         raise
     refund.provider_refund_id = provider_result["id"]
     provider_status = provider_result.get("status", "pending")

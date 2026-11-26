@@ -51,12 +51,12 @@ async def get_all_members(
 
     offset = (page - 1) * limit
     assignment_join = (
-        MemberGymAssignment.member_id == Member.id,
-        MemberGymAssignment.organization_id == Member.organization_id,
+        (MemberGymAssignment.member_id == Member.id)
+        & (MemberGymAssignment.organization_id == Member.organization_id)
     )
     members_query = (
         select(Member)
-        .join(MemberGymAssignment, *assignment_join)
+        .join(MemberGymAssignment, assignment_join)
         .where(
             MemberGymAssignment.gym_id == gym_id,
             MemberGymAssignment.status == "active",

@@ -105,3 +105,8 @@ async def create_private_pdf_document(
     )
     db.add(record)
     return record
+
+
+def delete_private_document(storage_key: str) -> None:
+    path = private_document_path(storage_key)
+    path.unlink(missing_ok=True)

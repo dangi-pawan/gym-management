@@ -345,7 +345,7 @@ All routes require the existing cookie authentication and CSRF behavior. Organiz
 - `POST /organizations/{organization_id}/membership-terms/{terms_id}/publish` — publish an immutable version.
 - `POST /organizations/{organization_id}/members/{member_id}/gym-assignments` — assign a member to another organization gym; optional primary assignment.
 - `GET /organizations/{organization_id}/members/{member_id}/gym-assignments` — list assignments.
-- `DELETE /organizations/{organization_id}/members/{member_id}/gym-assignments/{gym_id}` — deactivate an assignment. The final active assignment cannot be removed.
+- `DELETE /organizations/{organization_id}/members/{member_id}/gym-assignments/{gym_id}` — deactivate an assignment without deleting the organization-level member record.
 
 ### Subscriptions, payments, invoices, and access
 

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.features.memberships.models import MembershipDocument
+from app.features.memberships.storage import upload_private_object, download_private_object, delete_private_object as delete_s3_object
 
 
 def render_private_pdf(title: str, lines: list[str]) -> bytes:
@@ -48,6 +49,8 @@ def _document_root() -> Path:
 
 
 def private_document_path(storage_key: str) -> Path:
+    if settings.MEMBERSHIP_S3_BUCKET:
+        raise ValueError("Documents are stored in private object storage")
     relative = PurePosixPath(storage_key)
     if relative.is_absolute() or not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
         raise ValueError("Invalid private document storage key")
@@ -72,27 +75,29 @@ async def create_private_pdf_document(
         f"org-{organization_id}/subscriptions/{subscription_id}/"
         f"{document_type}-{uuid4().hex}.pdf"
     )
-    target = private_document_path(storage_key)
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    try:
-        os.chmod(target.parent, 0o700)
-    except OSError:
-        pass
-
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(target, flags, 0o600)
-    try:
-        with os.fdopen(descriptor, "wb") as output:
-            output.write(content)
-            output.flush()
-            os.fsync(output.fileno())
-    except Exception:
+    if settings.MEMBERSHIP_S3_BUCKET:
+        upload_private_object(storage_key, content, "application/pdf")
+    else:
+        target = private_document_path(storage_key)
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
-            target.unlink(missing_ok=True)
-        finally:
-            raise
+            os.chmod(target.parent, 0o700)
+        except OSError:
+            pass
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(target, flags, 0o600)
+        try:
+            with os.fdopen(descriptor, "wb") as output:
+                output.write(content)
+                output.flush()
+                os.fsync(output.fileno())
+        except Exception:
+            try:
+                target.unlink(missing_ok=True)
+            finally:
+                raise
 
     record = MembershipDocument(
         organization_id=organization_id,
@@ -107,6 +112,15 @@ async def create_private_pdf_document(
     return record
 
 
+def read_private_document(storage_key: str) -> bytes:
+    if settings.MEMBERSHIP_S3_BUCKET:
+        return download_private_object(storage_key)
+    return private_document_path(storage_key).read_bytes()
+
+
 def delete_private_document(storage_key: str) -> None:
+    if settings.MEMBERSHIP_S3_BUCKET:
+        delete_s3_object(storage_key)
+        return
     path = private_document_path(storage_key)
     path.unlink(missing_ok=True)

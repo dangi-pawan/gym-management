@@ -145,7 +145,7 @@ becomes an organization admin.
 | Create members | Yes | No | Yes |
 | Read members | Yes | Yes | Yes |
 | Update members | Yes | No | Yes |
-| Delete members | Yes | No | No |
+| Remove member from assigned gym | Yes | No | No |
 | Assign/remove gym staff | No | No | No |
 
 Only organization owners/admins can assign or remove gym staff. A gym role

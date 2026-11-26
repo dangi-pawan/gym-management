@@ -230,3 +230,75 @@ async def test_member_can_be_assigned_to_multiple_gyms(
         f"/organizations/{organization_id}/members/{member_id}/gym-assignments/{gym_one}"
     )
     assert remove_response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_all_gyms_subscription_grants_access_at_other_branch(
+    client,
+    create_gym,
+    organization_id,
+):
+    purchase_gym = (await create_gym("Purchase Branch")).json()["data"]["id"]
+    access_gym = (await create_gym("Access Branch")).json()["data"]["id"]
+    member_response = await client.post(
+        f"/gyms/{purchase_gym}/members/",
+        json={"name": "Multi Branch Subscriber", "age": 32},
+    )
+    member_id = member_response.json()["data"]["id"]
+
+    plan_response = await client.post(
+        f"/organizations/{organization_id}/membership-plans",
+        json={
+            "name": "Organization Wide Plan",
+            "duration_value": 30,
+            "duration_unit": "day",
+            "base_price": "750.00",
+            "access_type": "all_gyms",
+        },
+    )
+    assert plan_response.status_code == 201
+    plan_id = plan_response.json()["data"]["id"]
+
+    availability = await client.put(
+        f"/gyms/{purchase_gym}/membership-plans/{plan_id}",
+        json={"is_available": True},
+    )
+    assert availability.status_code == 200
+    activated = await client.post(
+        f"/organizations/{organization_id}/membership-plans/{plan_id}/activate"
+    )
+    assert activated.status_code == 200
+
+    created = await client.post(
+        f"/gyms/{purchase_gym}/members/{member_id}/subscriptions",
+        json={
+            "member_id": member_id,
+            "membership_plan_id": plan_id,
+            "start_date": date.today().isoformat(),
+        },
+    )
+    assert created.status_code == 201
+    subscription_id = created.json()["data"]["id"]
+    assert set(created.json()["data"]["access_gym_ids"]) == {purchase_gym, access_gym}
+
+    payment = await client.post(
+        f"/gyms/{purchase_gym}/subscriptions/{subscription_id}/payments/manual",
+        json={"payment_method": "cash"},
+    )
+    assert payment.status_code == 200
+
+    access = await client.get(
+        f"/gyms/{access_gym}/members/{member_id}/membership-access"
+    )
+    assert access.status_code == 200
+    assert access.json()["data"]["has_access"] is True
+
+    visible_subscription = await client.get(
+        f"/gyms/{access_gym}/subscriptions/{subscription_id}"
+    )
+    assert visible_subscription.status_code == 200
+
+    visible_invoice = await client.get(
+        f"/gyms/{access_gym}/subscriptions/{subscription_id}/invoice"
+    )
+    assert visible_invoice.status_code == 200

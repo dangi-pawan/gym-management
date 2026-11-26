@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -223,7 +223,7 @@ async def handle_razorpay_webhook(
 
     # Claim the event atomically: a check-then-insert is unsafe under concurrency.
     claimed = await db.execute(
-        pg_insert(PaymentWebhookEvent)
+        pg_insert(PaymentWebhookEvent.__table__)
         .values(provider="razorpay", event_id=event_id)
         .on_conflict_do_nothing(
             index_elements=[
@@ -238,15 +238,20 @@ async def handle_razorpay_webhook(
         return {"received": True, "duplicate": True}
 
     if event_type in {"refund.processed", "refund.failed"}:
-        refund_conditions = [PaymentRefund.provider_refund_id == refund_id]
         if internal_refund_id is not None:
-            refund_conditions.append(PaymentRefund.id == internal_refund_id)
-        refund_record = await db.scalar(
-            select(PaymentRefund).where(
-                PaymentRefund.provider == "razorpay",
-                or_(*refund_conditions),
+            refund_record = await db.scalar(
+                select(PaymentRefund).where(
+                    PaymentRefund.id == internal_refund_id,
+                    PaymentRefund.provider == "razorpay",
+                )
             )
-        )
+        else:
+            refund_record = await db.scalar(
+                select(PaymentRefund).where(
+                    PaymentRefund.provider == "razorpay",
+                    PaymentRefund.provider_refund_id == refund_id,
+                )
+            )
         if refund_record is None:
             raise _error(404, "Razorpay refund record not found")
 

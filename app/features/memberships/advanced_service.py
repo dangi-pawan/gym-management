@@ -438,8 +438,14 @@ async def refund_payment(
     else:
         refund.status = "pending"
     if refund.status == "processed":
-        total_processed = Decimal(refunded or 0) + amount
-        payment.status = "refunded" if total_processed >= payment.amount else "partially_refunded"
+        total_processed = await db.scalar(
+            select(func.coalesce(func.sum(PaymentRefund.amount), 0)).where(
+                PaymentRefund.organization_id == organization_id,
+                PaymentRefund.payment_id == payment_id,
+                PaymentRefund.status == "processed",
+            )
+        )
+        payment.status = "refunded" if Decimal(total_processed or 0) >= payment.amount else "partially_refunded"
     await db.commit()
     await db.refresh(refund)
     return refund

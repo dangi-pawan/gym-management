@@ -14,7 +14,7 @@ AccessType = Literal["home_gym", "all_gyms", "selected_gyms"]
 class MembershipPlanRulesInput(BaseModel):
     freeze_allowed: bool = False
     max_freeze_days: int | None = Field(default=None, ge=1)
-    transfer_allowed: bool = False
+    transfer_allowed: Literal[False] = False
     cancellation_allowed: bool = True
     refund_allowed: bool = False
     auto_renew_allowed: bool = False
@@ -260,3 +260,64 @@ PaymentEnvelope = APIResponse[PaymentResponse]
 InvoiceEnvelope = APIResponse[InvoiceResponse]
 MembershipDocumentListEnvelope = APIResponse[list[MembershipDocumentResponse]]
 MembershipAccessEnvelope = APIResponse[MembershipAccessResponse]
+
+
+class RazorpayOrderCreate(BaseModel):
+    pass
+
+
+class MembershipTaxSettingsUpdate(BaseModel):
+    gst_rate: Decimal = Field(ge=0, le=100, max_digits=5, decimal_places=2)
+    gstin: str | None = Field(default=None, min_length=15, max_length=15, pattern=r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
+    tax_mode: Literal["intra_state", "inter_state"] = "intra_state"
+
+
+class SubscriptionFreezeCreate(BaseModel):
+    start_date: date
+    end_date: date
+    reason: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_dates(self):
+        if self.end_date <= self.start_date:
+            raise ValueError("Freeze end_date must be after start_date")
+        return self
+
+
+class SubscriptionFreezeResponse(BaseModel):
+    id: int
+    organization_id: int
+    subscription_id: int
+    start_date: date
+    end_date: date
+    days: int
+    status: str
+    reason: str | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RefundCreate(BaseModel):
+    amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class RefundResponse(BaseModel):
+    id: int
+    payment_id: int
+    amount: Decimal
+    provider: str
+    provider_refund_id: str | None
+    status: str
+    reason: str | None
+    created_at: datetime
+    processed_at: datetime | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MembershipTaxSettingsResponse(BaseModel):
+    gst_rate: Decimal
+    gstin: str | None
+    tax_mode: str

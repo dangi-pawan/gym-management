@@ -149,7 +149,7 @@ class SubscriptionCreate(BaseModel):
     membership_plan_id: int = Field(gt=0)
     start_date: date
     terms_accepted: bool = False
-    acceptance_method: Literal["member_portal", "staff_assisted"] = "staff_assisted"
+    acceptance_method: Literal["staff_assisted"] = "staff_assisted"
 
 
 class SubscriptionRenew(BaseModel):

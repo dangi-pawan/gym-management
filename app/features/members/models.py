@@ -37,5 +37,8 @@ class Member(Base):
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     age: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    gym: Mapped[Gym] = relationship(back_populates="members")
+    gym: Mapped[Gym] = relationship(
+        back_populates="members",
+        foreign_keys=[gym_id],
+    )
     organization: Mapped[Organization] = relationship()

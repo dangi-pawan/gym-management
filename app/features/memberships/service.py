@@ -1051,16 +1051,6 @@ async def remove_member_gym_assignment(
     if assignment is None:
         return False
 
-    active_count = await db.scalar(
-        select(func.count()).select_from(MemberGymAssignment).where(
-            MemberGymAssignment.organization_id == organization_id,
-            MemberGymAssignment.member_id == member_id,
-            MemberGymAssignment.status == "active",
-        )
-    )
-    if active_count <= 1:
-        raise _http_error(409, "A member must retain at least one active gym assignment")
-
     was_primary = assignment.is_primary
     assignment.status = "inactive"
     assignment.is_primary = False

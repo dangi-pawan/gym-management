@@ -23,8 +23,10 @@ from app.features.memberships.models import (
     Payment,
     SubscriptionAccessGym,
     SubscriptionTermsAcceptance,
+    SubscriptionFreeze,
 )
 from app.features.memberships.documents import create_private_pdf_document, delete_private_document
+from app.features.memberships.advanced_service import calculate_tax
 from app.features.memberships.schemas import (
     GymMembershipPlanUpdate,
     ManualPaymentCreate,
@@ -575,7 +577,7 @@ async def create_subscription(
     rules_snapshot = {
         "freeze_allowed": bool(rules and rules.freeze_allowed),
         "max_freeze_days": rules.max_freeze_days if rules else None,
-        "transfer_allowed": bool(rules and rules.transfer_allowed),
+        "transfer_allowed": False,
         "cancellation_allowed": rules.cancellation_allowed if rules else True,
         "refund_allowed": bool(rules and rules.refund_allowed),
         "auto_renew_allowed": bool(rules and rules.auto_renew_allowed),
@@ -610,7 +612,9 @@ async def create_subscription(
     price = availability.price_override if availability.price_override is not None else plan.base_price
     joining_fee = availability.joining_fee_override if availability.joining_fee_override is not None else plan.joining_fee
     end_date = _add_duration(data.start_date, plan.duration_value, plan.duration_unit)
-    total_due = price + joining_fee
+    subtotal = price + joining_fee
+    tax = await calculate_tax(db, organization_id, subtotal)
+    total_due = tax["total_amount"]
     now = datetime.now(timezone.utc)
 
     subscription = MemberSubscription(
@@ -722,13 +726,20 @@ async def _create_invoice(
         return invoice
     invoice_number = f"INV-{subscription.organization_id}-{subscription.id:08d}"
     subtotal = subscription.plan_price_snapshot + subscription.joining_fee_snapshot
+    tax = await calculate_tax(db, subscription.organization_id, subtotal)
     invoice = Invoice(
         organization_id=subscription.organization_id,
         subscription_id=subscription.id,
         invoice_number=invoice_number,
         subtotal=subtotal,
-        tax_amount=Decimal("0.00"),
-        total_amount=subtotal,
+        tax_amount=tax["tax_amount"],
+        gst_rate=tax["gst_rate"],
+        cgst_amount=tax["cgst_amount"],
+        sgst_amount=tax["sgst_amount"],
+        igst_amount=tax["igst_amount"],
+        gstin_snapshot=tax["gstin"],
+        tax_mode_snapshot=tax["tax_mode"],
+        total_amount=tax["total_amount"],
         currency=subscription.currency_snapshot,
         status="issued",
         issued_at=datetime.now(timezone.utc),
@@ -758,7 +769,9 @@ async def record_manual_payment(
     if subscription.status != "pending_payment":
         raise _http_error(409, "Only pending-payment subscriptions can receive this payment")
 
-    amount_due = subscription.plan_price_snapshot + subscription.joining_fee_snapshot
+    subtotal = subscription.plan_price_snapshot + subscription.joining_fee_snapshot
+    tax = await calculate_tax(db, organization_id, subtotal)
+    amount_due = tax["total_amount"]
     if amount_due <= Decimal("0.00"):
         raise _http_error(409, "No payment is due for this subscription")
 
@@ -1219,6 +1232,13 @@ async def check_member_membership_access(
             MemberSubscription.status == "active",
             MemberSubscription.start_date <= checked_on,
             MemberSubscription.end_date > checked_on,
+            ~select(SubscriptionFreeze.id).where(
+                SubscriptionFreeze.organization_id == organization_id,
+                SubscriptionFreeze.subscription_id == MemberSubscription.id,
+                SubscriptionFreeze.status == "applied",
+                SubscriptionFreeze.start_date <= checked_on,
+                SubscriptionFreeze.end_date > checked_on,
+            ).exists(),
             SubscriptionAccessGym.organization_id == organization_id,
             SubscriptionAccessGym.gym_id == gym_id,
         )

@@ -834,9 +834,14 @@ async def list_member_subscriptions(
 ) -> list[dict]:
     result = await db.execute(
         select(MemberSubscription)
+        .join(
+            SubscriptionAccessGym,
+            SubscriptionAccessGym.subscription_id == MemberSubscription.id,
+        )
         .where(
             MemberSubscription.organization_id == organization_id,
-            MemberSubscription.purchased_at_gym_id == gym_id,
+            SubscriptionAccessGym.organization_id == organization_id,
+            SubscriptionAccessGym.gym_id == gym_id,
             MemberSubscription.member_id == member_id,
         )
         .order_by(MemberSubscription.created_at.desc())
@@ -855,6 +860,28 @@ async def get_gym_subscription(
             MemberSubscription.id == subscription_id,
             MemberSubscription.organization_id == organization_id,
             MemberSubscription.purchased_at_gym_id == gym_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_accessible_subscription(
+    db: AsyncSession,
+    organization_id: int,
+    gym_id: int,
+    subscription_id: int,
+) -> MemberSubscription | None:
+    result = await db.execute(
+        select(MemberSubscription)
+        .join(
+            SubscriptionAccessGym,
+            SubscriptionAccessGym.subscription_id == MemberSubscription.id,
+        )
+        .where(
+            MemberSubscription.id == subscription_id,
+            MemberSubscription.organization_id == organization_id,
+            SubscriptionAccessGym.organization_id == organization_id,
+            SubscriptionAccessGym.gym_id == gym_id,
         )
     )
     return result.scalar_one_or_none()
@@ -887,7 +914,7 @@ async def get_subscription_invoice(
     gym_id: int,
     subscription_id: int,
 ) -> Invoice | None:
-    subscription = await get_gym_subscription(db, organization_id, gym_id, subscription_id)
+    subscription = await get_accessible_subscription(db, organization_id, gym_id, subscription_id)
     if subscription is None:
         return None
     result = await db.execute(
@@ -1091,7 +1118,7 @@ async def list_subscription_documents(
     gym_id: int,
     subscription_id: int,
 ) -> list[MembershipDocument]:
-    subscription = await get_gym_subscription(
+    subscription = await get_accessible_subscription(
         db, organization_id, gym_id, subscription_id
     )
     if subscription is None:
@@ -1114,7 +1141,7 @@ async def get_subscription_document(
     subscription_id: int,
     document_id: int,
 ) -> MembershipDocument | None:
-    subscription = await get_gym_subscription(
+    subscription = await get_accessible_subscription(
         db, organization_id, gym_id, subscription_id
     )
     if subscription is None:

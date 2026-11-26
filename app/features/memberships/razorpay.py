@@ -65,7 +65,6 @@ async def create_order(amount_paise: int, currency: str, receipt: str, notes: di
         "currency": currency,
         "receipt": receipt[:40],
         "notes": notes,
-        "payment_capture": 1,
     })
 
 

@@ -154,3 +154,23 @@ async def test_membership_transfer_between_people_is_rejected(
         },
     )
     assert response.status_code == 422
+
+
+
+@pytest.mark.asyncio
+async def test_auto_renew_is_rejected_until_recurring_mandates_are_supported(
+    client, create_gym, organization_id,
+):
+    await create_gym("No Auto Renew Gym")
+    response = await client.post(
+        f"/organizations/{organization_id}/membership-plans",
+        json={
+            "name": "No Auto Renew Plan",
+            "duration_value": 1,
+            "duration_unit": "month",
+            "base_price": "100.00",
+            "access_type": "home_gym",
+            "rules": {"auto_renew_allowed": True},
+        },
+    )
+    assert response.status_code == 422

@@ -101,6 +101,7 @@ class MembershipPlanRules(Base):
         CheckConstraint("max_freeze_days IS NULL OR max_freeze_days >= 0", name="ck_membership_plan_rules_freeze_days_nonnegative"),
         CheckConstraint("freeze_allowed OR max_freeze_days IS NULL OR max_freeze_days = 0", name="ck_membership_plan_rules_freeze_disabled"),
         CheckConstraint("transfer_allowed IS FALSE", name="ck_membership_plan_rules_transfer_disabled"),
+        CheckConstraint("auto_renew_allowed IS FALSE", name="ck_membership_plan_rules_auto_renew_disabled"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -190,8 +191,6 @@ class MemberSubscription(Base):
     gstin_snapshot: Mapped[str | None] = mapped_column(String(15))
     created_by: Mapped[int] = mapped_column(Integer, nullable=False)
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    auto_renew_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
-    razorpay_subscription_id: Mapped[str | None] = mapped_column(String(100), unique=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

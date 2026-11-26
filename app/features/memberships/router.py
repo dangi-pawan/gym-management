@@ -45,6 +45,7 @@ from app.features.memberships.service import (
     create_membership_terms,
     create_subscription,
     get_gym_subscription,
+    get_accessible_subscription,
     get_membership_plan,
     get_subscription_invoice,
     check_member_membership_access,
@@ -306,7 +307,7 @@ async def get_subscription_endpoint(
     current_user: Annotated[User, Depends(require_gym_roles("manager", "trainer", "receptionist"))],
     db: AsyncSession = Depends(get_db),
 ):
-    subscription = await get_gym_subscription(
+    subscription = await get_accessible_subscription(
         db, current_user.organization_id, gym_id, subscription_id
     )
     if subscription is None:

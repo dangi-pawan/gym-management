@@ -38,7 +38,7 @@ from app.features.memberships.schemas import (
 from app.features.memberships.documents import read_private_document
 from app.features.memberships.advanced_service import (
     create_razorpay_order, handle_razorpay_webhook, update_tax_settings,
-    freeze_subscription, refund_payment,
+    freeze_subscription, refund_payment, retry_pending_refund,
 )
 from app.features.memberships.schemas import (
     MembershipTaxSettingsUpdate, MembershipTaxSettingsResponse,
@@ -639,5 +639,23 @@ async def refund_payment_endpoint(
     )
     return success_response(
         message="Payment refund processed",
+        data=RefundResponse.model_validate(refund),
+    )
+
+@router.post(
+    "/gyms/{gym_id}/refunds/{refund_id}/retry",
+    response_model=APIResponse[RefundResponse],
+)
+async def retry_pending_refund_endpoint(
+    gym_id: int,
+    refund_id: int,
+    current_user: Annotated[User, Depends(require_gym_roles("manager", "receptionist"))],
+    db: AsyncSession = Depends(get_db),
+):
+    refund = await retry_pending_refund(
+        db, current_user.organization_id, gym_id, refund_id,
+    )
+    return success_response(
+        message="Pending refund reconciled with Razorpay",
         data=RefundResponse.model_validate(refund),
     )

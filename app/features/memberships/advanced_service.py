@@ -33,10 +33,10 @@ async def calculate_tax(db: AsyncSession, organization_id: int, subtotal: Decima
             MembershipTaxSettings.organization_id == organization_id
         )
     )
-    settings = settings_result.scalar_one_or_none()
-    rate = settings.gst_rate if settings else settings.MEMBERSHIP_DEFAULT_GST_RATE
-    mode = settings.tax_mode if settings else "intra_state"
-    gstin = settings.gstin if settings else None
+    tax_settings = settings_result.scalar_one_or_none()
+    rate = tax_settings.gst_rate if tax_settings else settings.MEMBERSHIP_DEFAULT_GST_RATE
+    mode = tax_settings.tax_mode if tax_settings else "intra_state"
+    gstin = tax_settings.gstin if tax_settings else None
     return calculate_tax_snapshot(subtotal, rate, mode, gstin)
 
 
@@ -113,7 +113,7 @@ async def create_razorpay_order(
             "order_id": existing.provider_order_id,
             "amount": existing.amount,
             "currency": existing.currency,
-            "key_id": __import__("app.core.config", fromlist=["settings"]).settings.RAZORPAY_KEY_ID,
+            "key_id": settings.RAZORPAY_KEY_ID,
         }
 
     subtotal = subscription.plan_price_snapshot + subscription.joining_fee_snapshot
@@ -165,7 +165,8 @@ async def handle_razorpay_webhook(
         raise _error(400, "Invalid Razorpay webhook signature")
     try:
         payload = json.loads(raw_body)
-        if payload.get("event") != "payment.captured":
+        event_type = payload.get("event")
+        if event_type not in {"payment.captured", "payment.failed"}:
             return {"received": True, "ignored": True}
         entity = payload["payload"]["payment"]["entity"]
         order_id = entity["order_id"]
@@ -196,6 +197,11 @@ async def handle_razorpay_webhook(
         db.add(PaymentWebhookEvent(provider="razorpay", event_id=event_id))
         await db.commit()
         return {"received": True, "duplicate": True}
+    if payload.get("event") == "payment.failed":
+        payment.status = "failed"
+        db.add(PaymentWebhookEvent(provider="razorpay", event_id=event_id))
+        await db.commit()
+        return {"received": True, "failed": True}
     expected_paise = int((payment.amount * 100).to_integral_exact())
     if amount_paise != expected_paise:
         raise _error(400, "Razorpay payment amount does not match the server-side order")
@@ -280,6 +286,8 @@ async def freeze_subscription(
     if not rules.get("freeze_allowed"):
         raise _error(403, "Freezing is not allowed by this membership plan")
     days = (end_date - start_date).days
+    if start_date < subscription.start_date or end_date > subscription.end_date:
+        raise _error(422, "Freeze dates must fall within the current subscription period")
     if days <= 0:
         raise _error(422, "Freeze period must contain at least one day")
     maximum = rules.get("max_freeze_days")
@@ -337,7 +345,8 @@ async def refund_payment(
         raise _error(404, "Payment not found")
     if payment.provider != "razorpay" or payment.status not in {"succeeded", "partially_refunded"} or not payment.provider_payment_id:
         raise _error(409, "Only successfully captured Razorpay payments can be refunded automatically")
-    if not (payment and (await db.get(MemberSubscription, payment.subscription_id)).rules_snapshot.get("refund_allowed", False)):
+    linked_subscription = await db.get(MemberSubscription, payment.subscription_id)
+    if linked_subscription is None or not (linked_subscription.rules_snapshot or {}).get("refund_allowed", False):
         raise _error(403, "Refunds are not allowed by this membership plan")
     refunded = await db.scalar(
         select(func.coalesce(func.sum(PaymentRefund.amount), 0)).where(

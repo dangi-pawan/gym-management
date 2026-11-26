@@ -470,14 +470,13 @@ S3-compatible storage:
 - MEMBERSHIP_S3_ENDPOINT_URL (optional for AWS S3; set for compatible providers)
 - MEMBERSHIP_S3_ACCESS_KEY_ID / MEMBERSHIP_S3_SECRET_ACCESS_KEY (optional when workload IAM credentials are used)
 - MEMBERSHIP_S3_PREFIX
-- MEMBERSHIP_S3_PRESIGNED_URL_SECONDS
 
 Organization GST:
 - PUT /organizations/{organization_id}/membership-tax-settings
 
 Online payment:
 - POST /gyms/{gym_id}/subscriptions/{subscription_id}/payments/razorpay-order
-- POST /payments/razorpay/webhook (configure this exact URL in the Razorpay dashboard and subscribe to payment.captured and payment.failed)
+- POST /payments/razorpay/webhook (configure this exact URL in the Razorpay dashboard and subscribe to payment.captured, payment.failed, refund.processed and refund.failed)
 
 Freeze:
 - POST /gyms/{gym_id}/subscriptions/{subscription_id}/freeze

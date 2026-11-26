@@ -186,6 +186,8 @@ class MemberSubscription(Base):
     rules_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
     created_by: Mapped[int] = mapped_column(Integer, nullable=False)
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    auto_renew_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    razorpay_subscription_id: Mapped[str | None] = mapped_column(String(100), unique=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -229,6 +231,7 @@ class SubscriptionTermsAcceptance(Base):
 class Payment(Base):
     __tablename__ = "payments"
     __table_args__ = (
+        UniqueConstraint("id", "organization_id", name="uq_payments_id_org"),
         ForeignKeyConstraint(["subscription_id", "organization_id"], ["member_subscriptions.id", "member_subscriptions.organization_id"], name="fk_payments_subscription_org"),
         CheckConstraint("amount > 0", name="ck_payments_amount_positive"),
         CheckConstraint("status IN ('pending', 'succeeded', 'failed', 'refunded', 'partially_refunded')", name="ck_payments_status"),
@@ -244,6 +247,8 @@ class Payment(Base):
     payment_method: Mapped[str] = mapped_column(String(30), nullable=False)
     provider: Mapped[str] = mapped_column(String(30), nullable=False, server_default="manual")
     provider_reference: Mapped[str | None] = mapped_column(String(150))
+    provider_order_id: Mapped[str | None] = mapped_column(String(100), unique=True)
+    provider_payment_id: Mapped[str | None] = mapped_column(String(100), unique=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
     recorded_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -266,6 +271,12 @@ class Invoice(Base):
     invoice_number: Mapped[str] = mapped_column(String(50), nullable=False)
     subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     tax_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    gst_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, server_default="0")
+    cgst_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    sgst_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    igst_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    gstin_snapshot: Mapped[str | None] = mapped_column(String(15))
+    tax_mode_snapshot: Mapped[str] = mapped_column(String(20), nullable=False, server_default="intra_state")
     total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="draft")
@@ -289,3 +300,75 @@ class MembershipDocument(Base):
     checksum: Mapped[str] = mapped_column(String(64), nullable=False)
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+
+
+class MembershipTaxSettings(Base):
+    __tablename__ = "membership_tax_settings"
+    __table_args__ = (
+        CheckConstraint("gst_rate >= 0 AND gst_rate <= 100", name="ck_membership_tax_gst_rate"),
+        CheckConstraint("tax_mode IN ('intra_state', 'inter_state')", name="ck_membership_tax_mode"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), nullable=False, unique=True)
+    gst_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, server_default="0")
+    gstin: Mapped[str | None] = mapped_column(String(15))
+    tax_mode: Mapped[str] = mapped_column(String(20), nullable=False, server_default="intra_state")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class SubscriptionFreeze(Base):
+    __tablename__ = "subscription_freezes"
+    __table_args__ = (
+        ForeignKeyConstraint(["subscription_id", "organization_id"], ["member_subscriptions.id", "member_subscriptions.organization_id"], name="fk_subscription_freezes_subscription_org"),
+        ForeignKeyConstraint(["created_by", "organization_id"], ["users.id", "users.organization_id"], name="fk_subscription_freezes_creator_org"),
+        CheckConstraint("end_date > start_date", name="ck_subscription_freezes_date_range"),
+        CheckConstraint("status IN ('applied', 'cancelled')", name="ck_subscription_freezes_status"),
+        Index("ix_subscription_freezes_org_subscription", "organization_id", "subscription_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), nullable=False)
+    subscription_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    days: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="applied")
+    reason: Mapped[str | None] = mapped_column(String(500))
+    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class PaymentRefund(Base):
+    __tablename__ = "payment_refunds"
+    __table_args__ = (
+        ForeignKeyConstraint(["payment_id", "organization_id"], ["payments.id", "payments.organization_id"], name="fk_payment_refunds_payment_org"),
+        ForeignKeyConstraint(["recorded_by", "organization_id"], ["users.id", "users.organization_id"], name="fk_payment_refunds_user_org"),
+        CheckConstraint("amount > 0", name="ck_payment_refunds_amount_positive"),
+        CheckConstraint("status IN ('pending', 'processed', 'failed')", name="ck_payment_refunds_status"),
+        Index("ix_payment_refunds_org_payment", "organization_id", "payment_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), nullable=False)
+    payment_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    provider_refund_id: Mapped[str | None] = mapped_column(String(100), unique=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
+    reason: Mapped[str | None] = mapped_column(String(500))
+    recorded_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PaymentWebhookEvent(Base):
+    __tablename__ = "payment_webhook_events"
+    __table_args__ = (
+        UniqueConstraint("provider", "event_id", name="uq_payment_webhook_provider_event"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    event_id: Mapped[str] = mapped_column(String(150), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

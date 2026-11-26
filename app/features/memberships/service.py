@@ -772,10 +772,11 @@ async def record_manual_payment(
     db.add(payment)
     subscription.status = "active"
     subscription.activated_at = datetime.now(timezone.utc)
-    invoice = await _create_invoice(db, subscription)
-    await db.flush()
     generated_documents = []
     try:
+        await db.flush()
+        invoice = await _create_invoice(db, subscription)
+        await db.flush()
         generated_documents.append(
             await create_private_pdf_document(
                 db,

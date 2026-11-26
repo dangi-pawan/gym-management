@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.common.responses.schemas import APIResponse
 
@@ -19,14 +19,13 @@ class MembershipPlanRulesInput(BaseModel):
     refund_allowed: bool = False
     auto_renew_allowed: bool = False
 
-    @field_validator("max_freeze_days")
-    @classmethod
-    def validate_freeze_days(cls, value, info):
-        if not info.data.get("freeze_allowed", False) and value is not None:
+    @model_validator(mode="after")
+    def validate_freeze_policy(self):
+        if not self.freeze_allowed and self.max_freeze_days is not None:
             raise ValueError("max_freeze_days requires freeze_allowed=true")
-        if info.data.get("freeze_allowed", False) and value is None:
+        if self.freeze_allowed and self.max_freeze_days is None:
             raise ValueError("max_freeze_days is required when freezing is enabled")
-        return value
+        return self
 
 
 class MembershipPlanCreate(BaseModel):
@@ -95,6 +94,8 @@ class MembershipPlanResponse(BaseModel):
     status: str
     selected_gym_ids: list[int] = Field(default_factory=list)
     rules: MembershipPlanRulesInput
+    effective_price: Decimal | None = None
+    effective_joining_fee: Decimal | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

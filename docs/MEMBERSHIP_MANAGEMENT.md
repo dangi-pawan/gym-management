@@ -1,6 +1,14 @@
 # Membership Management
 
-This document is the implementation contract for the Membership Management feature. It defines the domain boundaries, organization/gym ownership rules, data model, lifecycle, authorization expectations, document handling, migration strategy, and verification checklist before application code is added.
+This document defines the domain boundaries, organization/gym ownership rules, data model, lifecycle, authorization expectations, document handling, migration strategy, and verification checklist.
+
+## Implementation status
+
+The first application implementation is present on `feature/membership-management`. Migration `e41b7c9d2a60` adds organization ownership to existing members, backfills their current gym assignment, adds gym timezones, and creates the membership domain tables. Existing member IDs and the legacy `members.gym_id` field are preserved.
+
+Implemented capabilities include organization-owned plans, gym availability and price overrides, structured rules, versioned terms, member-to-gym assignments, subscription snapshots and access-gym snapshots, manual payment recording, invoices, private PDF agreements/invoices/receipts, authorized document downloads, subscription renewal/cancellation, and gym-local access checks.
+
+The implementation is still subject to local migration and full-suite verification before merge. See the deployment limitations in section 10.
 
 ## 1. Confirmed product decisions
 
@@ -53,7 +61,7 @@ The purchasing gym must be an eligible gym for the plan. If the product later ne
 
 ## 4. Proposed database model
 
-All tables use the project's SQLAlchemy naming conventions and PostgreSQL types. Monetary amounts use Numeric(12, 2), never float. Timestamps are timezone-aware UTC. Membership start/end are date values interpreted using the gym's configured timezone for operational expiry checks.
+All tables use the project's SQLAlchemy naming conventions and PostgreSQL types. Monetary amounts use Numeric(12, 2), never float. Timestamps are timezone-aware UTC. Membership start/end are date values interpreted using the gym's configured IANA timezone. Existing gyms default to `Asia/Kolkata`; the gym create/update API validates timezone names.
 
 ### 4.1 membership_plans
 
@@ -315,25 +323,44 @@ Use end_date as an exclusive boundary in application logic: a subscription start
 
 Use existing role dependencies. All queries must include organization scope and gym authorization. Cross-tenant resources should return 404 where consistent with the existing authorization contract.
 
-## 8. API direction (not implemented yet)
+## 8. Implemented API reference
 
-Proposed organization plan endpoints:
-- POST /organizations/{organization_id}/membership-plans
-- GET /organizations/{organization_id}/membership-plans
-- GET /organizations/{organization_id}/membership-plans/{plan_id}
-- PATCH /organizations/{organization_id}/membership-plans/{plan_id}
-- POST /organizations/{organization_id}/membership-plans/{plan_id}/archive
-- PUT /gyms/{gym_id}/membership-plans/{plan_id} (availability and price overrides)
-- GET /gyms/{gym_id}/membership-plans
+All routes require the existing cookie authentication and CSRF behavior. Organization plan/terms/assignment management requires owner or admin. Gym-level subscription operations require the gym manager or receptionist; read-only membership and access checks also allow trainers. Existing owner/admin organization-role bypasses remain in effect for gyms inside the authenticated organization.
 
-Proposed subscriptions:
-- POST /gyms/{gym_id}/members/{member_id}/subscriptions
-- GET /gyms/{gym_id}/members/{member_id}/subscriptions
-- GET /subscriptions/{subscription_id}
-- POST /subscriptions/{subscription_id}/cancel
-- POST /subscriptions/{subscription_id}/renew
+### Plans and gym availability
 
-These are design proposals. Final request/response schemas and exact authorization dependencies are defined during implementation.
+- `POST /organizations/{organization_id}/membership-plans` — create a draft plan.
+- `GET /organizations/{organization_id}/membership-plans` — list organization plans.
+- `GET /organizations/{organization_id}/membership-plans/{plan_id}` — get a plan.
+- `PATCH /organizations/{organization_id}/membership-plans/{plan_id}` — update a draft/active plan; subscription snapshots are unaffected.
+- `POST /organizations/{organization_id}/membership-plans/{plan_id}/activate` — validate and activate.
+- `POST /organizations/{organization_id}/membership-plans/{plan_id}/archive` — archive for future sales without deleting history.
+- `PUT /gyms/{gym_id}/membership-plans/{plan_id}` — configure gym availability and optional price/joining-fee overrides.
+- `GET /gyms/{gym_id}/membership-plans` — list active plans available at the gym, including effective prices.
+
+### Terms and member-gym assignments
+
+- `POST /organizations/{organization_id}/membership-terms` — create a draft terms version.
+- `GET /organizations/{organization_id}/membership-terms` — list versions.
+- `POST /organizations/{organization_id}/membership-terms/{terms_id}/publish` — publish an immutable version.
+- `POST /organizations/{organization_id}/members/{member_id}/gym-assignments` — assign a member to another organization gym; optional primary assignment.
+- `GET /organizations/{organization_id}/members/{member_id}/gym-assignments` — list assignments.
+- `DELETE /organizations/{organization_id}/members/{member_id}/gym-assignments/{gym_id}` — deactivate an assignment. The final active assignment cannot be removed.
+
+### Subscriptions, payments, invoices, and access
+
+- `POST /gyms/{gym_id}/members/{member_id}/subscriptions` — create a pending-payment subscription (or activate a zero-value subscription).
+- `GET /gyms/{gym_id}/members/{member_id}/subscriptions` — list subscriptions accessible at that gym.
+- `GET /gyms/{gym_id}/subscriptions/{subscription_id}` — get a subscription at any gym included in its access snapshot.
+- `POST /gyms/{gym_id}/subscriptions/{subscription_id}/payments/manual` — record the full manual payment and activate the subscription.
+- `POST /gyms/{gym_id}/subscriptions/{subscription_id}/cancel` — cancel where the plan policy allows.
+- `POST /gyms/{gym_id}/subscriptions/{subscription_id}/renew` — create a non-overlapping renewal using the original plan.
+- `GET /gyms/{gym_id}/subscriptions/{subscription_id}/invoice` — retrieve the issued invoice record.
+- `GET /gyms/{gym_id}/subscriptions/{subscription_id}/documents` — list authorized private document metadata.
+- `GET /gyms/{gym_id}/subscriptions/{subscription_id}/documents/{document_id}` — download an authorized private PDF.
+- `GET /gyms/{gym_id}/members/{member_id}/membership-access` — evaluate access using the gym's local date and the subscription's materialized access-gym list.
+
+A manual payment amount is derived server-side from the stored subscription price and joining-fee snapshots; the client cannot choose the amount. A payment reference is unique for the manual provider. Pending subscriptions do not grant access. A subscription is eligible only when its status is active and the gym-local date is within the inclusive start/exclusive end interval.
 
 ## 9. Documentation and test requirements
 
@@ -369,16 +396,24 @@ ENV_FILE=.env.test pytest -q
 
 Do not merge until migrations, the complete automated suite, and manual Swagger scenarios pass. Do not run destructive database commands against the development database.
 
-## 10. Implementation sequence
+## 10. Implementation notes and rollout limitations
 
-1. Review current member model/API and implement the additive organization/member-gym migration safely.
-2. Implement membership plan models, schemas, repository/service, authorization, and CRUD tests.
-3. Implement gym plan availability and price overrides.
-4. Implement access configuration and plan rules.
-5. Implement subscription creation, lifecycle, snapshots, and tests.
-6. Implement versioned terms and acceptance records.
-7. Implement payments and invoices (manual payment first).
-8. Implement private PDF generation/storage and authorized downloads.
-9. Update this document and README links as endpoints become available.
+Implemented persistence and service behavior is covered by `tests/test_memberships.py`, including plan creation, gym price overrides, terms publication/acceptance, subscription snapshots, manual payment activation, invoice and PDF generation, selected-gym restrictions, multi-gym member assignments, and organization-wide access snapshots. The full test suite and migration must still be run locally before merge:
+
+```bash
+ENV_FILE=.env.test alembic upgrade head
+ENV_FILE=.env.test pytest -q
+```
+
+Current MVP boundaries that must be understood before production rollout:
+
+- Payment collection is staff-recorded manual payment (cash/UPI/card/bank transfer/other). There is no Razorpay integration, provider webhook verification, automated UPI reconciliation, refund execution, or partial-refund workflow yet. Do not mark an online provider payment successful from an unverified client callback.
+- Freeze, transfer, refund, and auto-renew policy fields are stored in the plan/subscription snapshots. Only cancellation policy is currently enforced as an operation; freeze/transfer/refund/auto-renew workflows remain future implementation work.
+- Invoice tax is currently zero. GST configuration, tax calculation, GSTIN, and statutory invoice requirements require product/accounting decisions before production invoicing in India.
+- Generated PDFs are stored in a private local filesystem directory configured by `MEMBERSHIP_DOCUMENTS_DIR` (default `.private/membership-documents`), with restrictive directory/file permissions and authenticated downloads. This is suitable for local/MVP deployment on a protected persistent volume, but a production multi-instance deployment must provide a private shared encrypted object-storage adapter, backup, retention, and malware-scanning policy. The current implementation does not publish public file URLs.
+- Terms versions are immutable after publication and acceptance evidence stores the terms hash, version, timestamp, method, request IP, and user agent. Legal sufficiency and retention requirements for electronic acceptance must be reviewed before launch.
+- Gym timezone defaults to `Asia/Kolkata` and is configurable using a validated IANA timezone. Access checks expire ended subscriptions when evaluated; deployments should also schedule a periodic expiry/cleanup job for reporting consistency.
+
+Do not merge until the test database migration, complete automated suite, and manual Swagger scenarios pass. Never reset or recreate the development database.
 
 No application models, routers, migrations, or tests are implied by this design document alone; those are subsequent implementation steps.

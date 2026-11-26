@@ -18,6 +18,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Gym-local dates are evaluated in this configured IANA timezone.
+    op.add_column(
+        "gyms",
+        sa.Column("timezone", sa.String(length=64), server_default="Asia/Kolkata", nullable=False),
+    )
+
     # Expand/backfill/contract: preserve existing member IDs and gym links.
     op.add_column("members", sa.Column("organization_id", sa.Integer(), nullable=True))
     op.execute(
@@ -345,3 +351,4 @@ def downgrade() -> None:
     op.drop_constraint("uq_members_id_organization", "members", type_="unique")
     op.drop_constraint("fk_members_organization_id_organizations", "members", type_="foreignkey")
     op.drop_column("members", "organization_id")
+    op.drop_column("gyms", "timezone")

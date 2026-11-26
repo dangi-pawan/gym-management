@@ -409,17 +409,14 @@ ENV_FILE=.env.test pytest -q
 
 Current MVP boundaries that must be understood before production rollout:
 
-- Payment collection is staff-recorded manual payment (cash/UPI/card/bank transfer/other). There is no Razorpay integration, provider webhook verification, automated UPI reconciliation, refund execution, or partial-refund workflow yet. Do not mark an online provider payment successful from an unverified client callback.
-- Freeze, transfer, refund, and auto-renew policy fields are stored in the plan/subscription snapshots. Only cancellation policy is currently enforced as an operation; freeze/transfer/refund/auto-renew workflows remain future implementation work.
-- Invoice tax is currently zero. GST configuration, tax calculation, GSTIN, and statutory invoice requirements require product/accounting decisions before production invoicing in India.
-- Generated PDFs are stored in a private local filesystem directory configured by `MEMBERSHIP_DOCUMENTS_DIR` (default `.private/membership-documents`), with restrictive directory/file permissions and authenticated downloads. This is suitable for local/MVP deployment on a protected persistent volume, but a production multi-instance deployment must provide a private shared encrypted object-storage adapter, backup, retention, and malware-scanning policy. The current implementation does not publish public file URLs.
-- Terms versions are immutable after publication and acceptance evidence stores the terms hash, version, timestamp, method, request IP, and user agent. Legal sufficiency and retention requirements for electronic acceptance must be reviewed before launch.
-- Gym timezone defaults to `Asia/Kolkata` and is configurable using a validated IANA timezone. Access checks expire ended subscriptions when evaluated; deployments should also schedule a periodic expiry/cleanup job for reporting consistency.
+- Razorpay one-time checkout, signed webhooks, captured-amount/currency checks, refund initiation, and refund webhooks are implemented. Only verified provider events activate subscriptions. Refunds with an uncertain provider response remain pending and must be reconciled before another refund is attempted.
+- Automatic recurring renewal is deliberately disabled. Razorpay mandate creation, member consent, recurring charge webhooks, per-cycle invoices, retries, and mandate cancellation are not implemented. Do not advertise or enable automatic charging.
+- Person-to-person membership transfer is prohibited by both request validation and a database constraint. Member-to-gym assignments are separate and do not transfer subscription ownership.
+- GST arithmetic is configurable and purchase-time/invoice snapshots are retained. The correct GST rate, SAC, place-of-supply treatment, registration and invoice wording must be confirmed by the organization's tax professional before real tax invoices are issued.
+- Private S3-compatible object storage is required in production. Local private storage is only a development/test fallback. Production deployments must configure bucket access policy, encryption, backups, retention and monitoring.
+- Terms acceptance, cancellation/refund wording and document retention require legal review before launch. The expiry command should be scheduled periodically for reporting consistency.
 
 Do not merge until the test database migration, complete automated suite, and manual Swagger scenarios pass. Never reset or recreate the development database.
-
-No application models, routers, migrations, or tests are implied by this design document alone; those are subsequent implementation steps.
-
 
 ## 11. Manual Swagger walkthrough
 

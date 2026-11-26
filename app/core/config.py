@@ -81,6 +81,8 @@ class Settings(BaseSettings):
             raise ValueError("MEMBERSHIP_S3_BUCKET must be configured in production")
         if self.APP_ENV == "production" and not self.RAZORPAY_WEBHOOK_SECRET:
             raise ValueError("RAZORPAY_WEBHOOK_SECRET must be configured in production")
+        if self.APP_ENV == "production" and not self.RAZORPAY_KEY_ID:
+            raise ValueError("RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET must be configured in production")
         if bool(self.MEMBERSHIP_S3_ACCESS_KEY_ID) != bool(self.MEMBERSHIP_S3_SECRET_ACCESS_KEY):
             raise ValueError("S3 access key ID and secret access key must be configured together")
         if bool(self.RAZORPAY_KEY_ID) != bool(self.RAZORPAY_KEY_SECRET):

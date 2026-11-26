@@ -17,6 +17,7 @@ from app.features.memberships.razorpay import (
     create_order as razorpay_create_order,
     create_refund as razorpay_create_refund,
     verify_webhook_signature,
+    RazorpayConfigurationError, RazorpayError,
 )
 from app.features.memberships.documents import create_private_pdf_document, delete_private_document
 from app.features.users.models import User
@@ -124,12 +125,17 @@ async def create_razorpay_order(
     amount = tax["total_amount"]
     if amount <= 0:
         raise _error(409, "No payment is due for this subscription")
-    order = await razorpay_create_order(
-        amount_paise=int((amount * 100).to_integral_exact()),
-        currency=subscription.currency_snapshot,
-        receipt=f"membership-{subscription.id}",
-        notes={"organization_id": str(organization_id), "subscription_id": str(subscription.id)},
-    )
+    try:
+        order = await razorpay_create_order(
+            amount_paise=int((amount * 100).to_integral_exact()),
+            currency=subscription.currency_snapshot,
+            receipt=f"membership-{subscription.id}",
+            notes={"organization_id": str(organization_id), "subscription_id": str(subscription.id)},
+        )
+    except RazorpayConfigurationError:
+        raise _error(503, "Razorpay is not configured") from None
+    except RazorpayError:
+        raise _error(502, "Razorpay could not create the payment order") from None
     payment = Payment(
         organization_id=organization_id,
         subscription_id=subscription.id,
@@ -161,7 +167,11 @@ async def create_razorpay_order(
 async def handle_razorpay_webhook(
     db: AsyncSession, raw_body: bytes, signature: str, event_id: str,
 ) -> dict:
-    if not verify_webhook_signature(raw_body, signature):
+    try:
+        signature_valid = verify_webhook_signature(raw_body, signature)
+    except RazorpayConfigurationError:
+        raise _error(503, "Razorpay webhook verification is not configured") from None
+    if not signature_valid:
         raise _error(400, "Invalid Razorpay webhook signature")
     try:
         payload = json.loads(raw_body)
@@ -376,9 +386,13 @@ async def refund_payment(
             int((amount * 100).to_integral_exact()),
             {"internal_refund_id": str(refund.id), "reason": (reason or "Membership refund")[:200]},
         )
-    except Exception:
+    except Exception as exc:
         refund.status = "failed"
         await db.commit()
+        if isinstance(exc, RazorpayConfigurationError):
+            raise _error(503, "Razorpay is not configured") from None
+        if isinstance(exc, RazorpayError):
+            raise _error(502, "Razorpay could not process the refund") from None
         raise
     refund.provider_refund_id = provider_result["id"]
     refund.status = "processed"

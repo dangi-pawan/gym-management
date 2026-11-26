@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     DB_POOL_TIMEOUT: int = 30
     DB_POOL_RECYCLE: int = 1800
 
+    MEMBERSHIP_DOCUMENTS_DIR: str = ".private/membership-documents"
+
     @model_validator(mode="after")
     def validate_cookie_settings(self):
         if self.COOKIE_SAMESITE == "none" and not self.COOKIE_SECURE:

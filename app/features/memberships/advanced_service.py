@@ -176,12 +176,16 @@ async def handle_razorpay_webhook(
     try:
         payload = json.loads(raw_body)
         event_type = payload.get("event")
-        if event_type not in {"payment.captured", "payment.failed"}:
+        if event_type in {"refund.processed", "refund.failed"}:
+            refund_entity = payload["payload"]["refund"]["entity"]
+            refund_id = refund_entity["id"]
+        elif event_type in {"payment.captured", "payment.failed"}:
+            entity = payload["payload"]["payment"]["entity"]
+            order_id = entity["order_id"]
+            provider_payment_id = entity["id"]
+            amount_paise = int(entity["amount"])
+        else:
             return {"received": True, "ignored": True}
-        entity = payload["payload"]["payment"]["entity"]
-        order_id = entity["order_id"]
-        provider_payment_id = entity["id"]
-        amount_paise = int(entity["amount"])
     except (ValueError, KeyError, TypeError):
         raise _error(400, "Invalid Razorpay payment webhook payload") from None
 
@@ -193,6 +197,36 @@ async def handle_razorpay_webhook(
     )
     if duplicate:
         return {"received": True, "duplicate": True}
+
+    if event_type in {"refund.processed", "refund.failed"}:
+        refund_result = await db.execute(
+            select(PaymentRefund).where(
+                PaymentRefund.provider == "razorpay",
+                PaymentRefund.provider_refund_id == refund_id,
+            ).with_for_update()
+        )
+        refund_record = refund_result.scalar_one_or_none()
+        if refund_record is None:
+            raise _error(404, "Razorpay refund record not found")
+        refund_record.status = "processed" if event_type == "refund.processed" else "failed"
+        if refund_record.status == "processed":
+            refund_record.processed_at = datetime.now(timezone.utc)
+        payment_record = await db.get(Payment, refund_record.payment_id)
+        if payment_record is not None:
+            processed_total = await db.scalar(
+                select(func.coalesce(func.sum(PaymentRefund.amount), 0)).where(
+                    PaymentRefund.organization_id == refund_record.organization_id,
+                    PaymentRefund.payment_id == refund_record.payment_id,
+                    PaymentRefund.status == "processed",
+                )
+            )
+            if Decimal(processed_total or 0) >= payment_record.amount:
+                payment_record.status = "refunded"
+            elif Decimal(processed_total or 0) > 0:
+                payment_record.status = "partially_refunded"
+        db.add(PaymentWebhookEvent(provider="razorpay", event_id=event_id))
+        await db.commit()
+        return {"received": True, "refund_status": refund_record.status}
 
     result = await db.execute(
         select(Payment).where(
@@ -395,10 +429,17 @@ async def refund_payment(
             raise _error(502, "Razorpay could not process the refund") from None
         raise
     refund.provider_refund_id = provider_result["id"]
-    refund.status = "processed"
-    refund.processed_at = datetime.now(timezone.utc)
-    total_refunded = Decimal(refunded or 0) + amount
-    payment.status = "refunded" if total_refunded >= payment.amount else "partially_refunded"
+    provider_status = provider_result.get("status", "pending")
+    if provider_status == "processed":
+        refund.status = "processed"
+        refund.processed_at = datetime.now(timezone.utc)
+    elif provider_status == "failed":
+        refund.status = "failed"
+    else:
+        refund.status = "pending"
+    if refund.status == "processed":
+        total_processed = Decimal(refunded or 0) + amount
+        payment.status = "refunded" if total_processed >= payment.amount else "partially_refunded"
     await db.commit()
     await db.refresh(refund)
     return refund

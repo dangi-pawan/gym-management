@@ -233,6 +233,14 @@ async def test_member_can_be_assigned_to_multiple_gyms(
     assert {item["gym_id"] for item in assignments} == {gym_one, gym_two}
     assert [item["gym_id"] for item in assignments if item["is_primary"]] == [gym_two]
 
+    second_gym_member = await client.get(
+        f"/gyms/{gym_two}/members/{member_id}"
+    )
+    assert second_gym_member.status_code == 200
+    second_gym_list = await client.get(f"/gyms/{gym_two}/members/")
+    assert second_gym_list.status_code == 200
+    assert second_gym_list.json()["data"]["total"] == 1
+
     remove_response = await client.delete(
         f"/organizations/{organization_id}/members/{member_id}/gym-assignments/{gym_one}"
     )

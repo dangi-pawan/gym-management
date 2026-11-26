@@ -12,6 +12,7 @@ from app.features.memberships.schemas import (
     ManualPaymentCreate,
     MembershipDocumentListEnvelope,
     MembershipDocumentResponse,
+    MembershipAccessEnvelope,
     MemberGymAssignmentCreate,
     MemberGymAssignmentResponse,
     MembershipPlanCreate,
@@ -46,6 +47,7 @@ from app.features.memberships.service import (
     get_gym_subscription,
     get_membership_plan,
     get_subscription_invoice,
+    check_member_membership_access,
     get_subscription_document,
     list_subscription_documents,
     list_gym_membership_plans,
@@ -509,4 +511,23 @@ async def download_subscription_document_endpoint(
         path=path,
         media_type=document.content_type,
         filename=f"membership-{document.document_type}-{document.id}.pdf",
+    )
+
+
+@router.get(
+    "/gyms/{gym_id}/members/{member_id}/membership-access",
+    response_model=MembershipAccessEnvelope,
+)
+async def check_member_membership_access_endpoint(
+    gym_id: int,
+    member_id: int,
+    current_user: Annotated[User, Depends(require_gym_roles("manager", "trainer", "receptionist"))],
+    db: AsyncSession = Depends(get_db),
+):
+    access = await check_member_membership_access(
+        db, current_user.organization_id, gym_id, member_id
+    )
+    return success_response(
+        message="Membership access evaluated successfully",
+        data=access,
     )

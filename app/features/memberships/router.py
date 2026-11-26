@@ -34,6 +34,15 @@ from app.features.memberships.schemas import (
     InvoiceEnvelope,
 )
 from app.features.memberships.documents import read_private_document
+from app.features.memberships.advanced_service import (
+    create_razorpay_order, handle_razorpay_webhook, update_tax_settings,
+    freeze_subscription, refund_payment,
+)
+from app.features.memberships.schemas import (
+    MembershipTaxSettingsUpdate, MembershipTaxSettingsResponse,
+    SubscriptionFreezeCreate, SubscriptionFreezeResponse,
+    RefundCreate, RefundResponse,
+)
 from app.features.memberships.service import (
     activate_membership_plan,
     assign_member_to_gym,
@@ -539,4 +548,92 @@ async def check_member_membership_access_endpoint(
     return success_response(
         message="Membership access evaluated successfully",
         data=access,
+    )
+
+
+@router.put("/organizations/{organization_id}/membership-tax-settings")
+async def update_membership_tax_settings_endpoint(
+    organization_id: int,
+    data: MembershipTaxSettingsUpdate,
+    current_user: Annotated[User, Depends(require_org_roles("owner", "admin"))],
+    db: AsyncSession = Depends(get_db),
+):
+    _ensure_current_organization(organization_id, current_user)
+    settings = await update_tax_settings(
+        db, organization_id, data.gst_rate, data.gstin, data.tax_mode
+    )
+    return success_response(
+        message="Membership GST settings updated",
+        data=MembershipTaxSettingsResponse.model_validate(settings),
+    )
+
+
+@router.post("/gyms/{gym_id}/subscriptions/{subscription_id}/payments/razorpay-order")
+async def create_razorpay_order_endpoint(
+    gym_id: int,
+    subscription_id: int,
+    current_user: Annotated[User, Depends(require_gym_roles("manager", "receptionist"))],
+    db: AsyncSession = Depends(get_db),
+):
+    order = await create_razorpay_order(
+        db, current_user.organization_id, gym_id, subscription_id, current_user
+    )
+    return success_response(message="Razorpay order created", data=order)
+
+
+@router.post("/payments/razorpay/webhook")
+async def razorpay_webhook_endpoint(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    raw_body = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+    event_id = request.headers.get("X-Razorpay-Event-Id", "")
+    if not signature or not event_id:
+        raise HTTPException(status_code=400, detail="Missing Razorpay webhook signature or event ID")
+    result = await handle_razorpay_webhook(db, raw_body, signature, event_id)
+    return success_response(message="Razorpay webhook processed", data=result)
+
+
+@router.post(
+    "/gyms/{gym_id}/subscriptions/{subscription_id}/freeze",
+    response_model=SubscriptionFreezeResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def freeze_subscription_endpoint(
+    gym_id: int,
+    subscription_id: int,
+    data: SubscriptionFreezeCreate,
+    current_user: Annotated[User, Depends(require_gym_roles("manager", "receptionist"))],
+    db: AsyncSession = Depends(get_db),
+):
+    freeze = await freeze_subscription(
+        db, current_user.organization_id, gym_id, subscription_id,
+        current_user, data.start_date, data.end_date, data.reason,
+    )
+    return success_response(
+        message="Membership freeze applied",
+        data=SubscriptionFreezeResponse.model_validate(freeze),
+    )
+
+
+@router.post(
+    "/gyms/{gym_id}/payments/{payment_id}/refunds",
+    response_model=RefundResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def refund_payment_endpoint(
+    gym_id: int,
+    payment_id: int,
+    data: RefundCreate,
+    current_user: Annotated[User, Depends(require_gym_roles("manager", "receptionist"))],
+    db: AsyncSession = Depends(get_db),
+):
+    refund = await refund_payment(
+        db, current_user.organization_id, gym_id, payment_id,
+        current_user, data.amount, data.reason,
+    )
+    return success_response(
+        message="Payment refund processed",
+        data=RefundResponse.model_validate(refund),
     )

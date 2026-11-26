@@ -808,3 +808,154 @@ async def get_subscription_invoice(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def assign_member_to_gym(
+    db: AsyncSession,
+    organization_id: int,
+    member_id: int,
+    gym_id: int,
+    is_primary: bool = False,
+) -> MemberGymAssignment:
+    member_result = await db.execute(
+        select(Member).where(
+            Member.id == member_id,
+            Member.organization_id == organization_id,
+        )
+    )
+    member = member_result.scalar_one_or_none()
+    if member is None:
+        raise _http_error(404, "Member not found")
+
+    gym_result = await db.execute(
+        select(Gym).where(
+            Gym.id == gym_id,
+            Gym.organization_id == organization_id,
+        )
+    )
+    if gym_result.scalar_one_or_none() is None:
+        raise _http_error(404, "Gym not found")
+
+    existing_result = await db.execute(
+        select(MemberGymAssignment).where(
+            MemberGymAssignment.member_id == member_id,
+            MemberGymAssignment.gym_id == gym_id,
+            MemberGymAssignment.organization_id == organization_id,
+        )
+    )
+    assignment = existing_result.scalar_one_or_none()
+    if assignment is not None and assignment.status == "active":
+        raise _http_error(409, "Member is already assigned to this gym")
+
+    if is_primary:
+        primary_result = await db.execute(
+            select(MemberGymAssignment).where(
+                MemberGymAssignment.member_id == member_id,
+                MemberGymAssignment.organization_id == organization_id,
+                MemberGymAssignment.status == "active",
+                MemberGymAssignment.is_primary.is_(True),
+            )
+        )
+        for current_primary in primary_result.scalars().all():
+            current_primary.is_primary = False
+
+    if assignment is None:
+        assignment = MemberGymAssignment(
+            organization_id=organization_id,
+            member_id=member_id,
+            gym_id=gym_id,
+            is_primary=is_primary,
+            status="active",
+        )
+        db.add(assignment)
+    else:
+        assignment.status = "active"
+        assignment.is_primary = is_primary
+
+    if is_primary or member.gym_id == gym_id:
+        member.gym_id = gym_id
+    await db.commit()
+    await db.refresh(assignment)
+    return assignment
+
+
+async def list_member_gym_assignments(
+    db: AsyncSession,
+    organization_id: int,
+    member_id: int,
+) -> list[MemberGymAssignment]:
+    member_result = await db.execute(
+        select(Member.id).where(
+            Member.id == member_id,
+            Member.organization_id == organization_id,
+        )
+    )
+    if member_result.scalar_one_or_none() is None:
+        raise _http_error(404, "Member not found")
+    result = await db.execute(
+        select(MemberGymAssignment)
+        .where(
+            MemberGymAssignment.organization_id == organization_id,
+            MemberGymAssignment.member_id == member_id,
+        )
+        .order_by(MemberGymAssignment.is_primary.desc(), MemberGymAssignment.id)
+    )
+    return list(result.scalars().all())
+
+
+async def remove_member_gym_assignment(
+    db: AsyncSession,
+    organization_id: int,
+    member_id: int,
+    gym_id: int,
+) -> bool:
+    member_result = await db.execute(
+        select(Member).where(
+            Member.id == member_id,
+            Member.organization_id == organization_id,
+        )
+    )
+    member = member_result.scalar_one_or_none()
+    if member is None:
+        return False
+
+    result = await db.execute(
+        select(MemberGymAssignment).where(
+            MemberGymAssignment.organization_id == organization_id,
+            MemberGymAssignment.member_id == member_id,
+            MemberGymAssignment.gym_id == gym_id,
+            MemberGymAssignment.status == "active",
+        )
+    )
+    assignment = result.scalar_one_or_none()
+    if assignment is None:
+        return False
+
+    active_count = await db.scalar(
+        select(func.count()).select_from(MemberGymAssignment).where(
+            MemberGymAssignment.organization_id == organization_id,
+            MemberGymAssignment.member_id == member_id,
+            MemberGymAssignment.status == "active",
+        )
+    )
+    if active_count <= 1:
+        raise _http_error(409, "A member must retain at least one active gym assignment")
+
+    was_primary = assignment.is_primary
+    assignment.status = "inactive"
+    assignment.is_primary = False
+    if member.gym_id == gym_id or was_primary:
+        remaining_result = await db.execute(
+            select(MemberGymAssignment).where(
+                MemberGymAssignment.organization_id == organization_id,
+                MemberGymAssignment.member_id == member_id,
+                MemberGymAssignment.status == "active",
+                MemberGymAssignment.gym_id != gym_id,
+            ).order_by(MemberGymAssignment.id)
+        )
+        remaining = remaining_result.scalars().all()
+        if remaining:
+            remaining[0].is_primary = True
+            member.gym_id = remaining[0].gym_id
+    await db.commit()
+    return True

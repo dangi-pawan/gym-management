@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from uuid import uuid4
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -358,6 +359,10 @@ class PaymentRefund(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     provider: Mapped[str] = mapped_column(String(30), nullable=False)
     provider_refund_id: Mapped[str | None] = mapped_column(String(100), unique=True)
+    idempotency_key: Mapped[str] = mapped_column(
+        String(36), nullable=False, unique=True,
+        default=lambda: str(uuid4()),
+    )
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
     reason: Mapped[str | None] = mapped_column(String(500))
     recorded_by: Mapped[int] = mapped_column(Integer, nullable=False)

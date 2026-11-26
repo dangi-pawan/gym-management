@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 from typing import Annotated
 
@@ -523,7 +524,7 @@ async def download_subscription_document_endpoint(
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
     try:
-        content = read_private_document(document.storage_key)
+        content = await asyncio.to_thread(read_private_document, document.storage_key)
     except (FileNotFoundError, ValueError, OSError):
         raise HTTPException(status_code=404, detail="Document file not found") from None
     if not hashlib.sha256(content).hexdigest() == document.checksum:
@@ -594,6 +595,8 @@ async def razorpay_webhook_endpoint(
     event_id = request.headers.get("X-Razorpay-Event-Id", "")
     if not signature or not event_id:
         raise HTTPException(status_code=400, detail="Missing Razorpay webhook signature or event ID")
+    if len(event_id) > 150:
+        raise HTTPException(status_code=400, detail="Invalid Razorpay webhook event ID")
     result = await handle_razorpay_webhook(db, raw_body, signature, event_id)
     return success_response(message="Razorpay webhook processed", data=result)
 

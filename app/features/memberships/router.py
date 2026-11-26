@@ -1,7 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.responses.helpers import success_response
@@ -33,7 +33,7 @@ from app.features.memberships.schemas import (
     SubscriptionRenew,
     InvoiceEnvelope,
 )
-from app.features.memberships.documents import private_document_path
+from app.features.memberships.documents import read_private_document
 from app.features.memberships.service import (
     activate_membership_plan,
     assign_member_to_gym,
@@ -513,15 +513,13 @@ async def download_subscription_document_endpoint(
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
     try:
-        path = private_document_path(document.storage_key)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="Document not found") from None
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Document file not found")
-    return FileResponse(
-        path=path,
+        content = read_private_document(document.storage_key)
+    except (FileNotFoundError, ValueError, OSError):
+        raise HTTPException(status_code=404, detail="Document file not found") from None
+    return Response(
+        content=content,
         media_type=document.content_type,
-        filename=f"membership-{document.document_type}-{document.id}.pdf",
+        headers={"Content-Disposition": f'attachment; filename="membership-{document.document_type}-{document.id}.pdf"'},
     )
 
 

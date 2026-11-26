@@ -212,3 +212,182 @@ def test_razorpay_webhook_signature_uses_constant_time_hmac(monkeypatch):
 
     assert verify_webhook_signature(body, signature) is True
     assert verify_webhook_signature(body, "invalid") is False
+
+
+@pytest.mark.asyncio
+async def test_refund_webhook_recovers_missing_provider_id_and_deduplicates(
+    client, create_gym, organization_id, db_connection, monkeypatch,
+):
+    import json
+
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    import app.features.memberships.advanced_service as membership_service
+    from app.core.config import settings
+    from app.features.memberships.models import Payment, PaymentRefund
+
+    gym_id = (await create_gym("Refund Recovery Gym")).json()["data"]["id"]
+    member = await client.post(
+        f"/gyms/{gym_id}/members/",
+        json={"name": "Refund Recovery Member", "age": 28},
+    )
+    member_id = member.json()["data"]["id"]
+
+    plan = await client.post(
+        f"/organizations/{organization_id}/membership-plans",
+        json={
+            "name": "Refund Enabled Plan",
+            "duration_value": 1,
+            "duration_unit": "month",
+            "base_price": "100.00",
+            "access_type": "home_gym",
+            "rules": {"refund_allowed": True, "transfer_allowed": False},
+        },
+    )
+    plan_id = plan.json()["data"]["id"]
+    await client.put(
+        f"/gyms/{gym_id}/membership-plans/{plan_id}",
+        json={"is_available": True},
+    )
+    await client.post(
+        f"/organizations/{organization_id}/membership-plans/{plan_id}/activate"
+    )
+    subscription = await client.post(
+        f"/gyms/{gym_id}/members/{member_id}/subscriptions",
+        json={
+            "member_id": member_id,
+            "membership_plan_id": plan_id,
+            "start_date": date.today().isoformat(),
+        },
+    )
+    subscription_id = subscription.json()["data"]["id"]
+
+    async def fake_create_order(**kwargs):
+        return {"id": "order_refund_recovery"}
+
+    monkeypatch.setattr(membership_service, "razorpay_create_order", fake_create_order)
+    monkeypatch.setattr(settings, "RAZORPAY_KEY_ID", "rzp_test_key")
+    order = await client.post(
+        f"/gyms/{gym_id}/subscriptions/{subscription_id}/payments/razorpay-order"
+    )
+    assert order.status_code == 200
+    payment_id = order.json()["data"]["payment_id"]
+
+    Session = async_sessionmaker(
+        bind=db_connection,
+        expire_on_commit=False,
+        autoflush=False,
+        join_transaction_mode="create_savepoint",
+    )
+    async with Session() as session:
+        payment = await session.scalar(
+            select(Payment).where(Payment.id == payment_id)
+        )
+        payment.status = "succeeded"
+        payment.provider_payment_id = "pay_refund_recovery"
+        await session.commit()
+
+    async def uncertain_refund(*args, **kwargs):
+        raise membership_service.RazorpayError("simulated provider timeout")
+
+    monkeypatch.setattr(membership_service, "razorpay_create_refund", uncertain_refund)
+    response = await client.post(
+        f"/gyms/{gym_id}/payments/{payment_id}/refunds",
+        json={"amount": "50.00", "reason": "Test refund"},
+    )
+    assert response.status_code == 502
+
+    async with Session() as session:
+        refund = await session.scalar(
+            select(PaymentRefund).where(PaymentRefund.payment_id == payment_id)
+        )
+        refund_id = refund.id
+        assert refund.status == "pending"
+        assert refund.provider_refund_id is None
+        assert len(refund.idempotency_key) == 36
+
+    monkeypatch.setattr(membership_service, "verify_webhook_signature", lambda *_: True)
+    event_payload = {
+        "event": "refund.processed",
+        "payload": {
+            "refund": {
+                "entity": {
+                    "id": "rfnd_refund_recovery",
+                    "payment_id": "pay_refund_recovery",
+                    "amount": 5000,
+                    "currency": "INR",
+                    "status": "processed",
+                    "notes": {"internal_refund_id": str(refund_id)},
+                }
+            }
+        },
+    }
+    headers = {
+        "X-Razorpay-Signature": "test-signature",
+        "X-Razorpay-Event-Id": "evt_refund_recovery",
+    }
+
+    # A mismatched amount must not consume the event ID or update the refund.
+    invalid_payload = json.loads(json.dumps(event_payload))
+    invalid_payload["payload"]["refund"]["entity"]["amount"] = 4000
+    invalid = await client.post(
+        "/payments/razorpay/webhook",
+        content=json.dumps(invalid_payload),
+        headers=headers,
+    )
+    assert invalid.status_code == 400
+
+    processed = await client.post(
+        "/payments/razorpay/webhook",
+        content=json.dumps(event_payload),
+        headers=headers,
+    )
+    assert processed.status_code == 200
+    assert processed.json()["data"]["refund_status"] == "processed"
+
+    duplicate = await client.post(
+        "/payments/razorpay/webhook",
+        content=json.dumps(event_payload),
+        headers=headers,
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["data"]["duplicate"] is True
+
+    async with Session() as session:
+        refund = await session.get(PaymentRefund, refund_id)
+        payment = await session.get(Payment, payment_id)
+        assert refund.status == "processed"
+        assert refund.provider_refund_id == "rfnd_refund_recovery"
+        assert payment.status == "partially_refunded"
+
+
+def test_razorpay_refund_request_sends_stable_idempotency_header(monkeypatch):
+    import asyncio
+
+    from app.features.memberships import razorpay
+
+    captured = {}
+
+    async def fake_request(method, path, payload=None, extra_headers=None):
+        captured.update(
+            method=method,
+            path=path,
+            payload=payload,
+            headers=extra_headers,
+        )
+        return {"id": "rfnd_idempotent", "status": "pending"}
+
+    monkeypatch.setattr(razorpay, "_request", fake_request)
+    result = asyncio.run(
+        razorpay.create_refund(
+            "pay_idempotent",
+            2500,
+            {"internal_refund_id": "42"},
+            "12345678-1234-5678-1234-567812345678",
+        )
+    )
+    assert result["id"] == "rfnd_idempotent"
+    assert captured["headers"]["X-Refund-Idempotency"] == (
+        "12345678-1234-5678-1234-567812345678"
+    )

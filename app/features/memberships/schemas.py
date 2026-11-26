@@ -187,6 +187,15 @@ class SubscriptionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class MembershipDocumentResponse(BaseModel):
+    id: int
+    subscription_id: int | None
+    document_type: str
+    content_type: str
+    checksum: str
+    generated_at: datetime
+
+
 class PaymentResponse(BaseModel):
     id: int
     subscription_id: int
@@ -223,3 +232,4 @@ SubscriptionEnvelope = APIResponse[SubscriptionResponse]
 SubscriptionListEnvelope = APIResponse[list[SubscriptionResponse]]
 PaymentEnvelope = APIResponse[PaymentResponse]
 InvoiceEnvelope = APIResponse[InvoiceResponse]
+MembershipDocumentListEnvelope = APIResponse[list[MembershipDocumentResponse]]

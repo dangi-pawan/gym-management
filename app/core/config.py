@@ -1,4 +1,5 @@
 import os
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -87,7 +88,5 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-
-from decimal import Decimal
 
 settings = Settings()

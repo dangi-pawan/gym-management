@@ -127,6 +127,23 @@ class MembershipTermsResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class MemberGymAssignmentCreate(BaseModel):
+    gym_id: int = Field(gt=0)
+    is_primary: bool = False
+
+
+class MemberGymAssignmentResponse(BaseModel):
+    id: int
+    organization_id: int
+    member_id: int
+    gym_id: int
+    is_primary: bool
+    status: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class SubscriptionCreate(BaseModel):
     member_id: int = Field(gt=0)
     membership_plan_id: int = Field(gt=0)

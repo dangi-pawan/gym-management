@@ -767,7 +767,7 @@ async def record_manual_payment(
             MemberSubscription.id == subscription_id,
             MemberSubscription.organization_id == organization_id,
             MemberSubscription.purchased_at_gym_id == gym_id,
-        )
+        ).with_for_update()
     )
     subscription = result.scalar_one_or_none()
     if subscription is None:

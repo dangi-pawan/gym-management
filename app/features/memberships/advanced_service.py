@@ -20,6 +20,7 @@ from app.features.memberships.razorpay import (
 )
 from app.features.memberships.documents import create_private_pdf_document, delete_private_document
 from app.features.users.models import User
+from app.core.config import settings
 
 
 def _error(status_code: int, detail: str) -> HTTPException:
@@ -33,9 +34,13 @@ async def calculate_tax(db: AsyncSession, organization_id: int, subtotal: Decima
         )
     )
     settings = settings_result.scalar_one_or_none()
-    rate = settings.gst_rate if settings else Decimal("0.00")
+    rate = settings.gst_rate if settings else settings.MEMBERSHIP_DEFAULT_GST_RATE
     mode = settings.tax_mode if settings else "intra_state"
     gstin = settings.gstin if settings else None
+    return calculate_tax_snapshot(subtotal, rate, mode, gstin)
+
+
+def calculate_tax_snapshot(subtotal: Decimal, rate: Decimal, mode: str, gstin: str | None) -> dict:
     tax = (subtotal * rate / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     zero = Decimal("0.00")
     cgst = (tax / 2).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if mode == "intra_state" else zero
@@ -112,7 +117,10 @@ async def create_razorpay_order(
         }
 
     subtotal = subscription.plan_price_snapshot + subscription.joining_fee_snapshot
-    tax = await calculate_tax(db, organization_id, subtotal)
+    tax = calculate_tax_snapshot(
+        subtotal, subscription.gst_rate_snapshot, subscription.tax_mode_snapshot,
+        subscription.gstin_snapshot,
+    )
     amount = tax["total_amount"]
     if amount <= 0:
         raise _error(409, "No payment is due for this subscription")

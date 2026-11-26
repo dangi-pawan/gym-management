@@ -23,6 +23,7 @@ from app.features.memberships.models import (
     SubscriptionAccessGym,
     SubscriptionTermsAcceptance,
 )
+from app.features.memberships.documents import create_private_pdf_document, delete_private_document
 from app.features.memberships.schemas import (
     GymMembershipPlanUpdate,
     ManualPaymentCreate,
@@ -637,6 +638,7 @@ async def create_subscription(
             subscription_id=subscription.id,
             gym_id=access_gym_id,
         ))
+    generated_documents = []
     if terms is not None:
         db.add(SubscriptionTermsAcceptance(
             organization_id=organization_id,
@@ -648,9 +650,53 @@ async def create_subscription(
             accepted_by_member_id=member.id,
             acceptance_method=data.acceptance_method,
         ))
+        generated_documents.append(
+            await create_private_pdf_document(
+                db,
+                organization_id,
+                subscription.id,
+                "agreement",
+                "Membership Agreement",
+                [
+                    f"Member: {member.name}",
+                    f"Plan: {plan.name}",
+                    f"Start date: {data.start_date.isoformat()}",
+                    f"Exclusive end date: {end_date.isoformat()}",
+                    f"Accepted terms: {terms.title} (version {terms.version})",
+                    "",
+                    terms.content,
+                ],
+                {"terms_id": terms.id, "terms_version": terms.version},
+            )
+        )
     if total_due == Decimal("0.00"):
-        await _create_invoice(db, subscription)
-    await db.commit()
+        invoice = await _create_invoice(db, subscription)
+        await db.flush()
+        generated_documents.append(
+            await create_private_pdf_document(
+                db,
+                organization_id,
+                subscription.id,
+                "invoice",
+                "Membership Invoice",
+                [
+                    f"Invoice: {invoice.invoice_number}",
+                    f"Plan: {plan.name}",
+                    f"Member: {member.name}",
+                    f"Subtotal: {invoice.subtotal} {invoice.currency}",
+                    f"Tax: {invoice.tax_amount} {invoice.currency}",
+                    f"Total: {invoice.total_amount} {invoice.currency}",
+                ],
+                {"invoice_id": invoice.id},
+            )
+        )
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        for document in generated_documents:
+            delete_private_document(document.storage_key)
+        raise
     await db.refresh(subscription)
     return await _subscription_payload(db, subscription)
 
@@ -726,12 +772,54 @@ async def record_manual_payment(
     db.add(payment)
     subscription.status = "active"
     subscription.activated_at = datetime.now(timezone.utc)
-    await _create_invoice(db, subscription)
+    invoice = await _create_invoice(db, subscription)
+    await db.flush()
+    generated_documents = []
     try:
+        generated_documents.append(
+            await create_private_pdf_document(
+                db,
+                organization_id,
+                subscription.id,
+                "invoice",
+                "Membership Invoice",
+                [
+                    f"Invoice: {invoice.invoice_number}",
+                    f"Subscription: {subscription.id}",
+                    f"Member ID: {subscription.member_id}",
+                    f"Subtotal: {invoice.subtotal} {invoice.currency}",
+                    f"Tax: {invoice.tax_amount} {invoice.currency}",
+                    f"Total: {invoice.total_amount} {invoice.currency}",
+                ],
+                {"invoice_id": invoice.id},
+            )
+        )
+        generated_documents.append(
+            await create_private_pdf_document(
+                db,
+                organization_id,
+                subscription.id,
+                "receipt",
+                "Membership Payment Receipt",
+                [
+                    f"Subscription: {subscription.id}",
+                    f"Payment ID: {payment.id}",
+                    f"Amount received: {payment.amount} {payment.currency}",
+                    f"Payment method: {payment.payment_method}",
+                    f"Reference: {payment.provider_reference or 'Not provided'}",
+                    f"Paid at: {payment.paid_at.isoformat()}",
+                ],
+                {"payment_id": payment.id},
+            )
+        )
         await db.commit()
-    except IntegrityError:
+    except Exception as exc:
         await db.rollback()
-        raise _http_error(409, "Payment reference has already been recorded") from None
+        for document in generated_documents:
+            delete_private_document(document.storage_key)
+        if isinstance(exc, IntegrityError):
+            raise _http_error(409, "Payment reference has already been recorded") from None
+        raise
     await db.refresh(payment)
     await db.refresh(subscription)
     return payment, subscription

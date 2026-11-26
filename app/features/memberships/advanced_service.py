@@ -92,7 +92,7 @@ async def create_razorpay_order(
             MemberSubscription.id == subscription_id,
             MemberSubscription.organization_id == organization_id,
             MemberSubscription.purchased_at_gym_id == gym_id,
-        )
+        ).with_for_update()
     )
     subscription = result.scalar_one_or_none()
     if subscription is None:
@@ -188,7 +188,7 @@ async def handle_razorpay_webhook(
         select(Payment).where(
             Payment.provider == "razorpay",
             Payment.provider_order_id == order_id,
-        )
+        ).with_for_update()
     )
     payment = result.scalar_one_or_none()
     if payment is None:
@@ -338,7 +338,7 @@ async def refund_payment(
             Payment.id == payment_id,
             Payment.organization_id == organization_id,
             MemberSubscription.purchased_at_gym_id == gym_id,
-        )
+        ).with_for_update()
     )
     payment = result.scalar_one_or_none()
     if payment is None:

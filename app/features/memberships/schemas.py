@@ -17,7 +17,7 @@ class MembershipPlanRulesInput(BaseModel):
     transfer_allowed: Literal[False] = False
     cancellation_allowed: bool = True
     refund_allowed: bool = False
-    auto_renew_allowed: bool = False
+    auto_renew_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_freeze_policy(self):

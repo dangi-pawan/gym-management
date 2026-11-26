@@ -8,7 +8,7 @@ The first application implementation is present on `feature/membership-managemen
 
 Implemented capabilities include organization-owned plans, gym availability and price overrides, structured rules, versioned terms, member-to-gym assignments, subscription snapshots and access-gym snapshots, manual payment recording, invoices, private PDF agreements/invoices/receipts, authorized document downloads, subscription renewal/cancellation, and gym-local access checks.
 
-The implementation is still subject to local migration and full-suite verification before merge. See the deployment limitations in section 10.
+The membership feature and its payment-hardening follow-up are implemented on the feature branch. Before merge, apply all migrations to the test database, run the complete suite, and complete the documented Razorpay/S3 staging checks. See the deployment limitations in section 10.
 
 ## 1. Confirmed product decisions
 
@@ -375,6 +375,12 @@ Keep this document updated with actual implemented behavior. Add:
 - operational notes for private document storage and retention.
 
 Required automated scenarios before merge:
+- Concurrent duplicate webhook deliveries produce one durable event claim and one business-state transition.
+- Refund webhooks can recover a pending refund when the provider response was lost, using the internal refund ID in Razorpay notes.
+- Refund webhook payment ID, amount, currency, and provider refund ID must match the persisted refund before state changes.
+- A failed refund request remains pending with its reserved amount; retry reuses the same persisted Razorpay idempotency key.
+- A delayed refund.failed event cannot downgrade a processed refund.
+- Concurrent manual payment attempts cannot activate or invoice the same pending subscription twice.
 - Organization tenant isolation for plans, members, gyms, subscriptions, payments, and documents.
 - Gym-specific plan availability and price override fallback.
 - Invalid, negative, and zero prices/durations rejected.
@@ -406,6 +412,8 @@ Implemented persistence and service behavior is covered by `tests/test_membershi
 ENV_FILE=.env.test alembic upgrade head
 ENV_FILE=.env.test pytest -q
 ```
+
+Migration chain now includes `b7e8c9d0a1f2_add_refund_idempotency_key.py`, which backfills a unique idempotency key for every existing refund before enforcing NOT NULL/UNIQUE. Never reset or recreate the test or development database to apply it.
 
 Current MVP boundaries that must be understood before production rollout:
 
@@ -446,9 +454,9 @@ After the walkthrough, run the full test suite. Do not point the API at the deve
 
 The follow-up implementation adds:
 
-- **Razorpay one-time checkout:** the server creates the order from the subscription's immutable amount/tax snapshot. A subscription stays pending_payment until a valid payment.captured webhook is received. The webhook HMAC is verified using RAZORPAY_WEBHOOK_SECRET; the captured amount must match the server-side order. Event IDs are stored for idempotency. Browser callbacks never activate access.
+- **Razorpay one-time checkout:** the server creates the order from the subscription's immutable amount/tax snapshot. A subscription stays pending_payment until a valid payment.captured webhook is received. The webhook HMAC is verified using RAZORPAY_WEBHOOK_SECRET; the captured amount and currency must match the server-side order. Webhook event IDs are claimed atomically with a PostgreSQL unique constraint/upsert, so concurrent duplicate deliveries cannot both process the same event. Payment/subscription rows are locked while state transitions occur. Browser callbacks never activate access.
 - **GST snapshots:** each organization can configure a GST percentage, GSTIN and tax mode (intra_state or inter_state). New subscriptions snapshot this policy. Intra-state tax is split into CGST/SGST; inter-state tax is IGST. Later tax-setting changes do not rewrite existing subscription quotes or invoices. The default GST rate is zero. The rate, place-of-supply treatment, SAC classification, invoice wording, GST registration and filing treatment must be confirmed by the organization's tax professional before issuing real tax invoices.
-- **Refunds:** full or partial refunds can be initiated for captured Razorpay payments only when the purchased plan allows refunds. Refund requests are capped at the remaining captured amount and recorded with the provider refund ID. Cash/UPI/card/bank-transfer manual refunds must be executed outside this API and reconciled by staff; the API does not claim to send those funds.
+- **Refunds:** full or partial refunds can be initiated for captured Razorpay payments only when the purchased plan allows refunds. Each refund persists a stable UUID idempotency key before the provider request and sends it as Razorpay's `X-Refund-Idempotency` header. A timeout/5xx leaves the refund pending and reserves its amount; it must not be treated as failed or refunded again with a new key. Razorpay refund webhooks are matched by provider refund ID or the internal refund ID in notes, then validated against the stored payment ID, amount, and currency before state changes. If the initial response was ambiguous and no provider refund ID was saved, an authorized manager/receptionist can retry the pending operation at `POST /gyms/{gym_id}/refunds/{refund_id}/retry`; the same key and identical payload are reused. If a provider refund ID is already stored, wait for the webhook/reconciliation rather than submitting another request. Cash/UPI/card/bank-transfer manual refunds must be executed outside this API and reconciled by staff; the API does not claim to send those funds.
 - **Subscription freezes:** staff can apply a non-overlapping freeze period to an active subscription when the plan allows it. The configured maximum is enforced, the subscription end date is extended by the frozen days, and access checks deny entry during the frozen interval.
 - **Membership expiry job:** run ENV_FILE=.env python3 -m scripts.expire_memberships periodically (for example, every 15 minutes using cron or a managed scheduler). It is idempotent and evaluates each subscription using its purchasing gym's IANA timezone.
 - **Private S3-compatible documents:** when MEMBERSHIP_S3_BUCKET is set, PDF bytes are written to a private S3-compatible bucket and served only through the authenticated application endpoint. In development/test, local private storage remains available. Production settings reject startup without an S3 bucket.
@@ -486,6 +494,6 @@ Refund:
 - **Person-to-person membership transfer is prohibited.** The API schema rejects transfer_allowed=true; gym access assignments remain a separate operation.
 - **Automatic recurring renewal is not yet enabled.** Auto-renew is deliberately disabled: the API rejects auto_renew_allowed=true and the database enforces false. Recurring Razorpay mandate creation, customer authorization, recurring charge webhooks, per-cycle invoices, retries and mandate cancellation are not implemented. Do not enable or advertise automatic charging until this workflow is built and tested with explicit member mandate consent.
 - Razorpay and S3 credentials, a webhook endpoint reachable by Razorpay, bucket private-access policy, encryption, backups, retention and monitoring must be configured in the deployment environment. Never commit credentials.
-- Razorpay refunds are provider-driven and may remain pending at Razorpay after the API accepts a request; production reconciliation should consume refund webhooks and reconcile provider settlement reports.
+- Razorpay refunds are provider-driven. Pending refunds with an unknown outcome remain reserved and can be safely retried only through the dedicated retry endpoint, which reuses the persisted idempotency key. Pending refunds that already have a provider refund ID must be reconciled through provider webhooks/settlement reports. Monitor aged pending refunds operationally; a future worker/scheduler can automate reconciliation, but Celery/Redis are intentionally not part of this membership PR.
 - The tax implementation provides configurable arithmetic and snapshots; it is not tax/legal advice and does not determine the correct GST rate, SAC code, place of supply or registration obligations.
 - Terms acceptance, GST treatment, refund/cancellation wording and document retention require Indian legal/accounting review before production launch.

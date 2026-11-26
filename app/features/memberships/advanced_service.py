@@ -1,4 +1,5 @@
 """Advanced membership workflows: online payment, GST, freezes and refunds."""
+import asyncio
 import json
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -208,9 +209,12 @@ async def handle_razorpay_webhook(
         refund_record = refund_result.scalar_one_or_none()
         if refund_record is None:
             raise _error(404, "Razorpay refund record not found")
-        refund_record.status = "processed" if event_type == "refund.processed" else "failed"
-        if refund_record.status == "processed":
-            refund_record.processed_at = datetime.now(timezone.utc)
+        # A processed refund is terminal: a delayed failure event must not
+        # roll back a confirmed refund.
+        if refund_record.status != "processed":
+            refund_record.status = "processed" if event_type == "refund.processed" else "failed"
+            if refund_record.status == "processed":
+                refund_record.processed_at = datetime.now(timezone.utc)
         await db.flush()
         payment_record = await db.get(Payment, refund_record.payment_id)
         if payment_record is not None:
@@ -250,6 +254,8 @@ async def handle_razorpay_webhook(
     expected_paise = int((payment.amount * 100).to_integral_exact())
     if amount_paise != expected_paise:
         raise _error(400, "Razorpay payment amount does not match the server-side order")
+    if entity.get("currency") != payment.currency:
+        raise _error(400, "Razorpay payment currency does not match the server-side order")
 
     subscription_result = await db.execute(
         select(MemberSubscription).where(
@@ -305,7 +311,7 @@ async def handle_razorpay_webhook(
     except Exception:
         await db.rollback()
         for document in generated:
-            delete_private_document(document.storage_key)
+            await asyncio.to_thread(delete_private_document, document.storage_key)
         raise
     return {"received": True, "duplicate": False}
 
@@ -320,7 +326,7 @@ async def freeze_subscription(
             MemberSubscription.id == subscription_id,
             MemberSubscription.organization_id == organization_id,
             MemberSubscription.purchased_at_gym_id == gym_id,
-        )
+        ).with_for_update()
     )
     subscription = result.scalar_one_or_none()
     if subscription is None:

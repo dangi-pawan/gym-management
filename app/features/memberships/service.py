@@ -512,6 +512,8 @@ async def create_subscription(
     gym_id: int,
     user: User,
     data: SubscriptionCreate,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
 ) -> dict:
     gym_result = await db.execute(
         select(Gym).where(Gym.id == gym_id, Gym.organization_id == organization_id)
@@ -649,6 +651,8 @@ async def create_subscription(
             accepted_at=now,
             accepted_by_member_id=member.id,
             acceptance_method=data.acceptance_method,
+            ip_address=ip_address,
+            user_agent=user_agent,
         ))
         generated_documents.append(
             await create_private_pdf_document(
@@ -1086,6 +1090,8 @@ async def renew_subscription(
     start_date: date | None,
     terms_accepted: bool,
     acceptance_method: str,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
 ) -> dict:
     previous = await get_gym_subscription(
         db, organization_id, gym_id, subscription_id
@@ -1108,7 +1114,7 @@ async def renew_subscription(
         acceptance_method=acceptance_method,
     )
     return await create_subscription(
-        db, organization_id, gym_id, user, renewal
+        db, organization_id, gym_id, user, renewal, ip_address, user_agent
     )
 
 

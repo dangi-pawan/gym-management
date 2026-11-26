@@ -41,7 +41,12 @@ def verify_webhook_signature(raw_body: bytes, signature: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
-async def _request(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+async def _request(
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
     credentials = _credentials()
     url = f"{settings.RAZORPAY_API_BASE_URL.rstrip('/')}/{path.lstrip('/')}"
     async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0)) as client:
@@ -50,7 +55,7 @@ async def _request(method: str, path: str, payload: dict[str, Any] | None = None
             url,
             auth=credentials,
             json=payload,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **(extra_headers or {})},
         )
     if response.is_error:
         raise RazorpayError(f"Razorpay request failed with HTTP {response.status_code}")
@@ -68,10 +73,19 @@ async def create_order(amount_paise: int, currency: str, receipt: str, notes: di
     })
 
 
-async def create_refund(payment_id: str, amount_paise: int, notes: dict[str, str]) -> dict[str, Any]:
+async def create_refund(
+    payment_id: str,
+    amount_paise: int,
+    notes: dict[str, str],
+    idempotency_key: str,
+) -> dict[str, Any]:
     if amount_paise <= 0:
         raise ValueError("Refund amount must be positive")
-    return await _request("POST", f"/payments/{payment_id}/refund", {
-        "amount": amount_paise,
-        "notes": notes,
-    })
+    if not idempotency_key or len(idempotency_key) < 10:
+        raise ValueError("A valid refund idempotency key is required")
+    return await _request(
+        "POST",
+        f"/payments/{payment_id}/refund",
+        {"amount": amount_paise, "notes": notes},
+        extra_headers={"X-Refund-Idempotency": idempotency_key},
+    )

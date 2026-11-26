@@ -152,6 +152,12 @@ class SubscriptionCreate(BaseModel):
     acceptance_method: Literal["member_portal", "staff_assisted"] = "staff_assisted"
 
 
+class SubscriptionRenew(BaseModel):
+    start_date: date | None = None
+    terms_accepted: bool = False
+    acceptance_method: Literal["member_portal", "staff_assisted"] = "staff_assisted"
+
+
 class ManualPaymentCreate(BaseModel):
     payment_method: Literal["cash", "upi", "card", "bank_transfer", "other"]
     provider_reference: str | None = Field(default=None, max_length=150)

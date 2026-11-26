@@ -72,6 +72,22 @@ class MembershipPlanUpdate(BaseModel):
     rules: MembershipPlanRulesInput | None = None
     selected_gym_ids: list[int] | None = None
 
+    @model_validator(mode="after")
+    def reject_null_required_fields(self):
+        required_when_set = (
+            "name",
+            "duration_value",
+            "duration_unit",
+            "base_price",
+            "joining_fee",
+            "currency",
+            "access_type",
+        )
+        for field_name in required_when_set:
+            if field_name in self.model_fields_set and getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} cannot be null")
+        return self
+
 
 class GymMembershipPlanUpdate(BaseModel):
     is_available: bool = True

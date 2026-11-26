@@ -49,17 +49,25 @@ async def _request(
 ) -> dict[str, Any]:
     credentials = _credentials()
     url = f"{settings.RAZORPAY_API_BASE_URL.rstrip('/')}/{path.lstrip('/')}"
-    async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0)) as client:
-        response = await client.request(
-            method,
-            url,
-            auth=credentials,
-            json=payload,
-            headers={"Content-Type": "application/json", **(extra_headers or {})},
-        )
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0)) as client:
+            response = await client.request(
+                method,
+                url,
+                auth=credentials,
+                json=payload,
+                headers={"Content-Type": "application/json", **(extra_headers or {})},
+            )
+    except httpx.HTTPError as exc:
+        # A network failure can happen after the provider accepted the request.
+        # Callers must preserve the operation's idempotency key for recovery.
+        raise RazorpayError("Razorpay request outcome is unknown") from exc
     if response.is_error:
         raise RazorpayError(f"Razorpay request failed with HTTP {response.status_code}")
-    return response.json()
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise RazorpayError("Razorpay returned an invalid response") from exc
 
 
 async def create_order(amount_paise: int, currency: str, receipt: str, notes: dict[str, str]) -> dict[str, Any]:

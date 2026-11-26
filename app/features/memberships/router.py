@@ -26,6 +26,7 @@ from app.features.memberships.schemas import (
     SubscriptionEnvelope,
     SubscriptionListEnvelope,
     SubscriptionResponse,
+    SubscriptionRenew,
     InvoiceEnvelope,
 )
 from app.features.memberships.service import (
@@ -47,6 +48,7 @@ from app.features.memberships.service import (
     list_membership_terms,
     publish_membership_terms,
     record_manual_payment,
+    renew_subscription,
     set_gym_membership_plan,
     update_membership_plan,
 )
@@ -426,3 +428,28 @@ async def remove_member_gym_assignment_endpoint(
     if not removed:
         raise HTTPException(status_code=404, detail="Member gym assignment not found")
     return success_response(message="Member gym assignment removed")
+
+
+@router.post(
+    "/gyms/{gym_id}/subscriptions/{subscription_id}/renew",
+    response_model=SubscriptionEnvelope,
+    status_code=status.HTTP_201_CREATED,
+)
+async def renew_subscription_endpoint(
+    gym_id: int,
+    subscription_id: int,
+    data: SubscriptionRenew,
+    current_user: Annotated[User, Depends(require_gym_roles("manager", "receptionist"))],
+    db: AsyncSession = Depends(get_db),
+):
+    subscription = await renew_subscription(
+        db,
+        current_user.organization_id,
+        gym_id,
+        current_user,
+        subscription_id,
+        data.start_date,
+        data.terms_accepted,
+        data.acceptance_method,
+    )
+    return success_response(message="Subscription renewal created", data=subscription)

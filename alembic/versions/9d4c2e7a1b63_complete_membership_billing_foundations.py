@@ -16,6 +16,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    op.add_column("member_subscriptions", sa.Column("gst_rate_snapshot", sa.Numeric(5, 2), server_default="0", nullable=False))
+    op.add_column("member_subscriptions", sa.Column("tax_mode_snapshot", sa.String(20), server_default="intra_state", nullable=False))
+    op.add_column("member_subscriptions", sa.Column("gstin_snapshot", sa.String(15), nullable=True))
     op.add_column("member_subscriptions", sa.Column("auto_renew_enabled", sa.Boolean(), server_default=sa.text("false"), nullable=False))
     op.add_column("member_subscriptions", sa.Column("razorpay_subscription_id", sa.String(100), nullable=True))
     op.create_unique_constraint("uq_member_subscriptions_razorpay_subscription", "member_subscriptions", ["razorpay_subscription_id"])
@@ -113,6 +116,9 @@ def downgrade() -> None:
     op.drop_constraint("uq_payments_id_org", "payments", type_="unique")
     op.drop_column("payments", "provider_payment_id")
     op.drop_column("payments", "provider_order_id")
+    op.drop_column("member_subscriptions", "gstin_snapshot")
+    op.drop_column("member_subscriptions", "tax_mode_snapshot")
+    op.drop_column("member_subscriptions", "gst_rate_snapshot")
     op.drop_constraint("uq_member_subscriptions_razorpay_subscription", "member_subscriptions", type_="unique")
     op.drop_column("member_subscriptions", "razorpay_subscription_id")
     op.drop_column("member_subscriptions", "auto_renew_enabled")

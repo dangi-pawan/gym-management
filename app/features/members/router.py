@@ -111,4 +111,4 @@ async def delete_member_endpoint(
     deleted = await delete_member(db, gym_id, member_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Member not found")
-    return success_response(message="Member deleted successfully")
+    return success_response(message="Member removed from gym successfully")

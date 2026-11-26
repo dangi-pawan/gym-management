@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -165,6 +166,23 @@ async def create_razorpay_order(
     }
 
 
+async def _sync_payment_refund_status(db: AsyncSession, payment: Payment) -> None:
+    processed_total = await db.scalar(
+        select(func.coalesce(func.sum(PaymentRefund.amount), 0)).where(
+            PaymentRefund.organization_id == payment.organization_id,
+            PaymentRefund.payment_id == payment.id,
+            PaymentRefund.status == "processed",
+        )
+    )
+    total = Decimal(processed_total or 0)
+    if total >= payment.amount:
+        payment.status = "refunded"
+    elif total > 0:
+        payment.status = "partially_refunded"
+    else:
+        payment.status = "succeeded"
+
+
 async def handle_razorpay_webhook(
     db: AsyncSession, raw_body: bytes, signature: str, event_id: str,
 ) -> dict:
@@ -174,12 +192,25 @@ async def handle_razorpay_webhook(
         raise _error(503, "Razorpay webhook verification is not configured") from None
     if not signature_valid:
         raise _error(400, "Invalid Razorpay webhook signature")
+    if not event_id or len(event_id) > 150:
+        raise _error(400, "Invalid Razorpay webhook event ID")
+
     try:
         payload = json.loads(raw_body)
         event_type = payload.get("event")
         if event_type in {"refund.processed", "refund.failed"}:
             refund_entity = payload["payload"]["refund"]["entity"]
             refund_id = refund_entity["id"]
+            refund_payment_id = refund_entity["payment_id"]
+            refund_amount_paise = int(refund_entity["amount"])
+            refund_currency = refund_entity["currency"]
+            notes = refund_entity.get("notes") or {}
+            internal_refund_id_raw = notes.get("internal_refund_id") if isinstance(notes, dict) else None
+            internal_refund_id = (
+                int(internal_refund_id_raw)
+                if str(internal_refund_id_raw).isdigit()
+                else None
+            )
         elif event_type in {"payment.captured", "payment.failed"}:
             entity = payload["payload"]["payment"]["entity"]
             order_id = entity["order_id"]
@@ -190,80 +221,104 @@ async def handle_razorpay_webhook(
     except (ValueError, KeyError, TypeError, AttributeError):
         raise _error(400, "Invalid Razorpay payment webhook payload") from None
 
-    duplicate = await db.scalar(
-        select(PaymentWebhookEvent.id).where(
-            PaymentWebhookEvent.provider == "razorpay",
-            PaymentWebhookEvent.event_id == event_id,
+    # Claim the event atomically: a check-then-insert is unsafe under concurrency.
+    claimed = await db.execute(
+        pg_insert(PaymentWebhookEvent)
+        .values(provider="razorpay", event_id=event_id)
+        .on_conflict_do_nothing(
+            index_elements=[
+                PaymentWebhookEvent.provider,
+                PaymentWebhookEvent.event_id,
+            ]
         )
+        .returning(PaymentWebhookEvent.id)
     )
-    if duplicate:
+    if claimed.scalar_one_or_none() is None:
+        await db.rollback()
         return {"received": True, "duplicate": True}
 
     if event_type in {"refund.processed", "refund.failed"}:
-        refund_result = await db.execute(
+        refund_conditions = [PaymentRefund.provider_refund_id == refund_id]
+        if internal_refund_id is not None:
+            refund_conditions.append(PaymentRefund.id == internal_refund_id)
+        refund_record = await db.scalar(
             select(PaymentRefund).where(
                 PaymentRefund.provider == "razorpay",
-                PaymentRefund.provider_refund_id == refund_id,
-            ).with_for_update()
+                or_(*refund_conditions),
+            )
         )
-        refund_record = refund_result.scalar_one_or_none()
         if refund_record is None:
             raise _error(404, "Razorpay refund record not found")
-        # A processed refund is terminal: a delayed failure event must not
-        # roll back a confirmed refund.
+
+        # Lock payment first and refund second everywhere to avoid lock inversion.
+        payment_record = await db.scalar(
+            select(Payment).where(
+                Payment.id == refund_record.payment_id,
+                Payment.organization_id == refund_record.organization_id,
+            ).with_for_update()
+        )
+        if payment_record is None:
+            raise _error(404, "Payment for Razorpay refund was not found")
+        refund_record = await db.scalar(
+            select(PaymentRefund).where(
+                PaymentRefund.id == refund_record.id,
+                PaymentRefund.organization_id == payment_record.organization_id,
+            ).with_for_update()
+        )
+        if refund_record is None:
+            raise _error(404, "Razorpay refund record not found")
+
+        expected_refund_paise = int((refund_record.amount * 100).to_integral_exact())
+        if (
+            payment_record.provider_payment_id != refund_payment_id
+            or refund_amount_paise != expected_refund_paise
+            or refund_currency != payment_record.currency
+        ):
+            raise _error(400, "Razorpay refund details do not match the recorded refund")
+        if refund_record.provider_refund_id and refund_record.provider_refund_id != refund_id:
+            raise _error(409, "Razorpay refund ID does not match the recorded refund")
+
+        refund_record.provider_refund_id = refund_id
+        # A late failure event must never downgrade a confirmed refund.
         if refund_record.status != "processed":
-            refund_record.status = "processed" if event_type == "refund.processed" else "failed"
-            if refund_record.status == "processed":
+            if event_type == "refund.processed":
+                refund_record.status = "processed"
                 refund_record.processed_at = datetime.now(timezone.utc)
-        await db.flush()
-        payment_record = await db.get(Payment, refund_record.payment_id)
-        if payment_record is not None:
-            processed_total = await db.scalar(
-                select(func.coalesce(func.sum(PaymentRefund.amount), 0)).where(
-                    PaymentRefund.organization_id == refund_record.organization_id,
-                    PaymentRefund.payment_id == refund_record.payment_id,
-                    PaymentRefund.status == "processed",
-                )
-            )
-            if Decimal(processed_total or 0) >= payment_record.amount:
-                payment_record.status = "refunded"
-            elif Decimal(processed_total or 0) > 0:
-                payment_record.status = "partially_refunded"
-        db.add(PaymentWebhookEvent(provider="razorpay", event_id=event_id))
+            elif refund_record.status == "pending":
+                refund_record.status = "failed"
+        await _sync_payment_refund_status(db, payment_record)
         await db.commit()
         return {"received": True, "refund_status": refund_record.status}
 
-    result = await db.execute(
+    payment = await db.scalar(
         select(Payment).where(
             Payment.provider == "razorpay",
             Payment.provider_order_id == order_id,
         ).with_for_update()
     )
-    payment = result.scalar_one_or_none()
     if payment is None:
         raise _error(404, "Payment order not found")
     if payment.status == "succeeded":
-        db.add(PaymentWebhookEvent(provider="razorpay", event_id=event_id))
         await db.commit()
         return {"received": True, "duplicate": True}
-    if payload.get("event") == "payment.failed":
-        payment.status = "failed"
-        db.add(PaymentWebhookEvent(provider="razorpay", event_id=event_id))
+    if event_type == "payment.failed":
+        if payment.status != "succeeded":
+            payment.status = "failed"
         await db.commit()
         return {"received": True, "failed": True}
+
     expected_paise = int((payment.amount * 100).to_integral_exact())
     if amount_paise != expected_paise:
         raise _error(400, "Razorpay payment amount does not match the server-side order")
     if entity.get("currency") != payment.currency:
         raise _error(400, "Razorpay payment currency does not match the server-side order")
 
-    subscription_result = await db.execute(
+    subscription = await db.scalar(
         select(MemberSubscription).where(
             MemberSubscription.id == payment.subscription_id,
             MemberSubscription.organization_id == payment.organization_id,
-        )
+        ).with_for_update()
     )
-    subscription = subscription_result.scalar_one_or_none()
     if subscription is None or subscription.status != "pending_payment":
         raise _error(409, "Subscription is not awaiting payment")
 
@@ -275,7 +330,6 @@ async def handle_razorpay_webhook(
     payment.paid_at = now
     subscription.status = "active"
     subscription.activated_at = now
-    db.add(PaymentWebhookEvent(provider="razorpay", event_id=event_id))
 
     from app.features.memberships.service import _create_invoice
     generated = []
@@ -421,44 +475,89 @@ async def refund_payment(
     db.add(refund)
     await db.commit()
     await db.refresh(refund)
+    return await _submit_pending_refund(db, refund.id, organization_id, gym_id)
+
+
+async def _submit_pending_refund(
+    db: AsyncSession, refund_id: int, organization_id: int, gym_id: int,
+) -> PaymentRefund:
+    refund = await db.scalar(
+        select(PaymentRefund).where(
+            PaymentRefund.id == refund_id,
+            PaymentRefund.organization_id == organization_id,
+            PaymentRefund.provider == "razorpay",
+            PaymentRefund.status == "pending",
+            PaymentRefund.provider_refund_id.is_(None),
+        )
+    )
+    if refund is None:
+        raise _error(409, "Only pending refunds without a provider ID can be retried")
+
+    payment = await db.scalar(
+        select(Payment)
+        .join(MemberSubscription, MemberSubscription.id == Payment.subscription_id)
+        .where(
+            Payment.id == refund.payment_id,
+            Payment.organization_id == organization_id,
+            MemberSubscription.purchased_at_gym_id == gym_id,
+        ).with_for_update()
+    )
+    if payment is None or not payment.provider_payment_id:
+        raise _error(404, "Refund payment not found")
+
+    # Lock payment first and refund second. The DB lock prevents two retry
+    # requests from issuing parallel provider calls for the same refund.
+    refund = await db.scalar(
+        select(PaymentRefund).where(
+            PaymentRefund.id == refund_id,
+            PaymentRefund.organization_id == organization_id,
+            PaymentRefund.status == "pending",
+            PaymentRefund.provider_refund_id.is_(None),
+        ).with_for_update()
+    )
+    if refund is None:
+        raise _error(409, "Refund is already being reconciled or has a provider ID")
+
     try:
         provider_result = await razorpay_create_refund(
             payment.provider_payment_id,
-            int((amount * 100).to_integral_exact()),
-            {"internal_refund_id": str(refund.id), "reason": (reason or "Membership refund")[:200]},
+            int((refund.amount * 100).to_integral_exact()),
+            {
+                "internal_refund_id": str(refund.id),
+                "reason": (refund.reason or "Membership refund")[:200],
+            },
+            refund.idempotency_key,
         )
+    except RazorpayConfigurationError:
+        await db.rollback()
+        raise _error(503, "Razorpay is not configured; refund remains pending") from None
     except Exception as exc:
-        # A timeout or 5xx can happen after Razorpay accepted the refund.
-        # Keep the amount reserved as pending until a webhook/reconciliation
-        # confirms the provider's final state; marking it failed could permit
-        # a second refund and overpay the customer.
-        if isinstance(exc, RazorpayConfigurationError):
-            refund.status = "failed"
-            await db.commit()
-            raise _error(503, "Razorpay is not configured") from None
-        await db.commit()
+        await db.rollback()
         if isinstance(exc, RazorpayError):
-            raise _error(502, "Razorpay refund status is unconfirmed; reconcile before retrying") from None
+            raise _error(502, "Refund status is unconfirmed; retry the same refund to reconcile it") from None
         raise
+
+    if refund.provider_refund_id and refund.provider_refund_id != provider_result["id"]:
+        await db.rollback()
+        raise _error(409, "Razorpay returned a different refund ID for this idempotent request")
     refund.provider_refund_id = provider_result["id"]
     provider_status = provider_result.get("status", "pending")
-    if provider_status == "processed":
-        refund.status = "processed"
-        refund.processed_at = datetime.now(timezone.utc)
-    elif provider_status == "failed":
-        refund.status = "failed"
-    else:
-        refund.status = "pending"
-    if refund.status == "processed":
-        await db.flush()
-        total_processed = await db.scalar(
-            select(func.coalesce(func.sum(PaymentRefund.amount), 0)).where(
-                PaymentRefund.organization_id == organization_id,
-                PaymentRefund.payment_id == payment_id,
-                PaymentRefund.status == "processed",
-            )
-        )
-        payment.status = "refunded" if Decimal(total_processed or 0) >= payment.amount else "partially_refunded"
+    if refund.status != "processed":
+        if provider_status == "processed":
+            refund.status = "processed"
+            refund.processed_at = datetime.now(timezone.utc)
+        elif provider_status == "failed" and refund.status == "pending":
+            refund.status = "failed"
+    await _sync_payment_refund_status(db, payment)
     await db.commit()
     await db.refresh(refund)
     return refund
+
+
+async def retry_pending_refund(
+    db: AsyncSession,
+    organization_id: int,
+    gym_id: int,
+    refund_id: int,
+) -> PaymentRefund:
+    return await _submit_pending_refund(db, refund_id, organization_id, gym_id)

@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -264,13 +264,20 @@ async def create_subscription_endpoint(
     gym_id: int,
     member_id: int,
     data: SubscriptionCreate,
+    request: Request,
     current_user: Annotated[User, Depends(require_gym_roles("manager", "receptionist"))],
     db: AsyncSession = Depends(get_db),
 ):
     if data.member_id != member_id:
         raise HTTPException(status_code=422, detail="Member ID in path and body must match")
     subscription = await create_subscription(
-        db, current_user.organization_id, gym_id, current_user, data
+        db,
+        current_user.organization_id,
+        gym_id,
+        current_user,
+        data,
+        request.client.host if request.client else None,
+        request.headers.get("user-agent"),
     )
     return success_response(
         message="Subscription created",
@@ -448,6 +455,7 @@ async def renew_subscription_endpoint(
     gym_id: int,
     subscription_id: int,
     data: SubscriptionRenew,
+    request: Request,
     current_user: Annotated[User, Depends(require_gym_roles("manager", "receptionist"))],
     db: AsyncSession = Depends(get_db),
 ):
@@ -460,6 +468,8 @@ async def renew_subscription_endpoint(
         data.start_date,
         data.terms_accepted,
         data.acceptance_method,
+        request.client.host if request.client else None,
+        request.headers.get("user-agent"),
     )
     return success_response(message="Subscription renewal created", data=subscription)
 

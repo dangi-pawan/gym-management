@@ -417,7 +417,7 @@ Migration chain now includes `b7e8c9d0a1f2_add_refund_idempotency_key.py`, which
 
 Current MVP boundaries that must be understood before production rollout:
 
-- Razorpay one-time checkout, signed webhooks, captured-amount/currency checks, refund initiation, and refund webhooks are implemented. Only verified provider events activate subscriptions. Refunds with an uncertain provider response remain pending and must be reconciled before another refund is attempted.
+- Razorpay one-time checkout, signed webhooks, captured-amount/currency checks, refund initiation, and refund webhooks are implemented. Only verified provider events activate subscriptions. Refunds with an uncertain provider response remain pending and reserve the amount. If no provider refund ID was saved, retry only through the retry endpoint, which reuses the original provider idempotency key; never create a replacement refund.
 - Automatic recurring renewal is deliberately disabled. Razorpay mandate creation, member consent, recurring charge webhooks, per-cycle invoices, retries, and mandate cancellation are not implemented. Do not advertise or enable automatic charging.
 - Person-to-person membership transfer is prohibited by both request validation and a database constraint. Member-to-gym assignments are separate and do not transfer subscription ownership.
 - GST arithmetic is configurable and purchase-time/invoice snapshots are retained. The correct GST rate, SAC, place-of-supply treatment, registration and invoice wording must be confirmed by the organization's tax professional before real tax invoices are issued.
@@ -488,6 +488,7 @@ Freeze:
 
 Refund:
 - POST /gyms/{gym_id}/payments/{payment_id}/refunds
+- POST /gyms/{gym_id}/refunds/{refund_id}/retry — safe retry of an ambiguous pending refund with the original idempotency key
 
 ### Explicitly unsupported / production gates
 

@@ -1092,7 +1092,19 @@ async def renew_subscription(
     if previous.status not in {"active", "expired"}:
         raise _http_error(409, "Only active or expired subscriptions can be renewed")
 
-    earliest_start = max(date.today(), previous.end_date)
+    from zoneinfo import ZoneInfo
+
+    gym_result = await db.execute(
+        select(Gym).where(
+            Gym.id == gym_id,
+            Gym.organization_id == organization_id,
+        )
+    )
+    gym = gym_result.scalar_one_or_none()
+    if gym is None:
+        raise _http_error(404, "Gym not found")
+    local_today = datetime.now(ZoneInfo(gym.timezone)).date()
+    earliest_start = max(local_today, previous.end_date)
     renewal_start = start_date or earliest_start
     if renewal_start < earliest_start:
         raise _http_error(422, "Renewal cannot overlap the previous subscription or start in the past")

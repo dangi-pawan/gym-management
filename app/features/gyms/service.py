@@ -1,4 +1,4 @@
-from sqlalchemy import exists, func, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.features.gyms.models import Gym
@@ -124,10 +124,12 @@ async def delete_gym(db: AsyncSession, gym_id: int):
 
     membership_history_exists = await db.scalar(
         select(
-            exists().where(GymMembershipPlan.gym_id == gym_id)
-            | exists().where(MembershipPlanAccessGym.gym_id == gym_id)
-            | exists().where(MemberSubscription.purchased_at_gym_id == gym_id)
-            | exists().where(SubscriptionAccessGym.gym_id == gym_id)
+            or_(
+                exists().where(GymMembershipPlan.gym_id == gym_id),
+                exists().where(MembershipPlanAccessGym.gym_id == gym_id),
+                exists().where(MemberSubscription.purchased_at_gym_id == gym_id),
+                exists().where(SubscriptionAccessGym.gym_id == gym_id),
+            )
         )
     )
     if membership_history_exists:

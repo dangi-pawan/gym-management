@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
+from prometheus_client import make_asgi_app
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.exceptions import RedisError
@@ -11,6 +12,7 @@ import app.db.models
 
 from app.db.session import engine, get_db
 from app.core.config import settings
+from app.core.metrics import PrometheusMetricsMiddleware
 from app.core.redis import (
     check_redis_connection,
     close_redis_client,
@@ -76,11 +78,18 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
+# Keep metrics middleware outside the application middleware stack so that
+# handled errors and responses are measured consistently.
+app.add_middleware(PrometheusMetricsMiddleware)
 
 app.add_exception_handler(AppException, app_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, unexpected_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
+
+# Prometheus scrapes this ASGI application. Scrape requests are excluded
+# from application request metrics by PrometheusMetricsMiddleware.
+app.mount("/metrics", make_asgi_app())
 
 
 @app.get("/")

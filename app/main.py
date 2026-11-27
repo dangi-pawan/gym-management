@@ -1,15 +1,21 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from redis.exceptions import RedisError
 
 import app.db.models
 
 from app.db.session import engine, get_db
 from app.core.config import settings
+from app.core.redis import (
+    check_redis_connection,
+    close_redis_client,
+    create_redis_client,
+)
 from app.features.members.router import router as members_router
 from app.features.memberships.router import router as memberships_router
 from app.features.gyms.router import router as gyms_router
@@ -30,17 +36,29 @@ from app.features.users.staff_router import router as gym_staff_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    redis_client = None
     try:
         async with engine.connect() as connection:
             await connection.execute(text("SELECT 1"))
 
         print("Database connection established successfully!")
 
+        redis_client = create_redis_client()
+        await check_redis_connection(redis_client)
+        app.state.redis = redis_client
+        print("Redis connection established successfully!")
+
         yield
 
     finally:
-        await engine.dispose()
-        print("Database connection pool disposed.")
+        app.state.redis = None
+        try:
+            if redis_client is not None:
+                await close_redis_client(redis_client)
+                print("Redis connection closed.")
+        finally:
+            await engine.dispose()
+            print("Database connection pool disposed.")
 
 
 app = FastAPI(
@@ -79,6 +97,20 @@ async def database_health(
         "database": "connected",
         "result": result.scalar(),
     }
+
+
+@app.get("/health/redis")
+async def redis_health(request: Request):
+    redis_client = getattr(request.app.state, "redis", None)
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail="Redis is unavailable")
+
+    try:
+        await check_redis_connection(redis_client)
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="Redis is unavailable") from exc
+
+    return {"redis": "connected"}
 
 
 app.include_router(organizations_router)

@@ -65,8 +65,12 @@ services to become healthy, runs Alembic migrations, and then starts Uvicorn.
    ```
 
    Set unique values for `JWT_SECRET_KEY`, `CSRF_SECRET_KEY`, and
-   `POSTGRES_PASSWORD`. Use secrets of at least 32 characters for the JWT and
-   CSRF keys. Do not commit `.env`.
+   `POSTGRES_PASSWORD`. Use URL-safe characters for the PostgreSQL password
+   because it is embedded in the container's database URL. Use secrets of at
+   least 32 characters for the JWT and CSRF keys. Do not commit `.env`.
+   The example maps PostgreSQL to host port 5433 and Redis to 6380 to avoid
+   colliding with locally installed services; change `POSTGRES_PORT` or
+   `REDIS_PORT` in `.env` if needed.
 
 2. Build and start the stack:
 
